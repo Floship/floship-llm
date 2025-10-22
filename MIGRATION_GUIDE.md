@@ -40,7 +40,6 @@ The following files remain in the support-app's `llm/` directory as they have Dj
 - `tasks.py` - Threaded background tasks for PR updates
 - `helpers.py` - Django-dependent helper functions
 - `config.json` - Project-specific configuration
-- `legacy_agents.py` - Legacy agent implementations
 
 ### 4. Updated Imports
 
