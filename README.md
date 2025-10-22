@@ -6,9 +6,11 @@ A reusable Python library for interacting with OpenAI-compatible inference endpo
 
 - 🚀 Simple and intuitive API for LLM interactions
 - 🔄 Support for continuous (multi-turn) conversations
-- 📊 Structured output with Pydantic schemas
+- �️ **Tool/Function calling** - Let the LLM execute Python functions
+- �📊 Structured output with Pydantic schemas
 - 🎯 JSON response parsing and validation
 - ⚙️ Configurable parameters (temperature, penalties, etc.)
+- 🔁 Retry mechanism with configurable limits
 - 🔌 Compatible with any OpenAI-compatible API
 
 ## Installation
@@ -116,6 +118,72 @@ response = llm.prompt("Generate 3 labels for a ticket about database optimizatio
 print(response.labels)
 ```
 
+### Tool/Function Calling
+
+Enable the LLM to execute Python functions during conversations:
+
+```python
+from floship_llm import LLM, ToolFunction, ToolParameter
+
+# Create LLM with tool support
+llm = LLM(enable_tools=True)
+
+# Simple function wrapping
+def calculate_tax(amount: float, rate: float) -> float:
+    """Calculate tax on an amount."""
+    return amount * rate / 100
+
+llm.add_tool_from_function(calculate_tax, description="Calculate tax on amount")
+
+# The LLM can now call this function automatically
+response = llm.prompt("What's the tax on $1000 at 8.5% rate?")
+print(response)  # LLM will call calculate_tax(1000, 8.5) and include result
+```
+
+#### Advanced Tool Definition
+
+```python
+# Define tools with detailed parameters
+weather_tool = ToolFunction(
+    name="get_weather",
+    description="Get current weather for a location",
+    parameters=[
+        ToolParameter(
+            name="location", 
+            type="string", 
+            description="City name",
+            required=True
+        ),
+        ToolParameter(
+            name="units", 
+            type="string",
+            enum=["celsius", "fahrenheit"],
+            default="celsius"
+        )
+    ],
+    function=get_weather_data  # Your function
+)
+
+llm.add_tool(weather_tool)
+response = llm.prompt("What's the weather in Tokyo?")
+```
+
+#### Tool Management
+
+```python
+# List available tools
+print(llm.list_tools())
+
+# Remove a tool
+llm.remove_tool("get_weather")
+
+# Clear all tools
+llm.clear_tools()
+
+# Enable/disable tool support
+llm.enable_tool_support(True)  # or False
+```
+
 ## Configuration
 
 The library requires the following environment variables:
@@ -155,24 +223,52 @@ llm = LLM(
 )
 ```
 
-### Token Limits
+### Token Limits and Retry Control
 
 ```python
 llm = LLM(
     type='completion',
     input_tokens_limit=40_000,  # Input token limit
-    max_length=100_000  # Maximum response length
+    max_length=100_000,  # Maximum response length
+    max_retry=3  # Maximum retry attempts (default: 3)
 )
+```
+
+### Multi-Step Tool Workflows
+
+The LLM can automatically chain multiple tools together:
+
+```python
+# Define data processing tools
+llm.add_tool_from_function(load_csv_data)
+llm.add_tool_from_function(filter_data)
+llm.add_tool_from_function(calculate_statistics)
+llm.add_tool_from_function(generate_chart)
+
+# LLM will call tools in sequence as needed
+response = llm.prompt("""
+    Load sales data from 'Q4_sales.csv', 
+    filter for amounts > $1000,
+    calculate average and total,
+    then create a bar chart
+""")
 ```
 
 ## Included Schemas
 
 The library includes several pre-built Pydantic schemas:
 
+### Response Schemas
 - `ThinkingModel`: Base model with reasoning/thought process
 - `Suggestion`: Code review suggestions
 - `SuggestionsResponse`: Collection of suggestions
 - `Labels`: Label generation for categorization
+
+### Tool Schemas
+- `ToolParameter`: Define function parameters with validation
+- `ToolFunction`: Complete tool definitions with OpenAI compatibility
+- `ToolCall`: Represents tool invocations from the LLM
+- `ToolResult`: Captures tool execution results and status
 
 ## Utilities
 
@@ -204,13 +300,26 @@ json_str = lm_json_utils.extract_strict_json(text)
 - `messages` (list): Initial conversation history
 - `max_length` (int): Maximum response length (default: 100,000)
 - `input_tokens_limit` (int): Input token limit (default: 40,000)
+- `max_retry` (int): Maximum retry attempts (default: 3)
+- `enable_tools` (bool): Enable tool/function calling (default: False)
 - `system` (str): System prompt
 
 **Methods:**
+
+*Core Methods:*
 - `prompt(prompt, system=None, retry=False)`: Generate a response
 - `add_message(role, content)`: Add a message to conversation history
 - `reset()`: Clear conversation history
 - `embed(text)`: Generate embeddings (future feature)
+
+*Tool Management:*
+- `add_tool(tool)`: Add a ToolFunction to available tools
+- `add_tool_from_function(func, name=None, description=None)`: Wrap Python function as tool
+- `remove_tool(name)`: Remove a tool by name
+- `list_tools()`: Get list of available tool names
+- `clear_tools()`: Remove all tools
+- `enable_tool_support(enabled=True)`: Enable/disable tool support
+- `execute_tool(tool_call)`: Execute a tool call and return result
 
 **Properties:**
 - `supports_parallel_requests`: Check if model supports parallel requests
@@ -223,8 +332,23 @@ json_str = lm_json_utils.extract_strict_json(text)
 ### Running Tests
 
 ```bash
+# Run all tests
 pytest tests/
+
+# Run with coverage
+pytest --cov=floship_llm --cov-report=html
+
+# Run specific test files
+pytest tests/test_tools.py -v  # Tool functionality tests
+pytest tests/test_client.py -v  # Core client tests
 ```
+
+**Test Coverage:** 166 tests covering all functionality including:
+- Core LLM client operations
+- Tool/function calling workflows
+- Schema validation and JSON processing
+- Error handling and edge cases
+- 95% overall code coverage
 
 ### Code Formatting
 
@@ -236,6 +360,50 @@ black floship_llm/
 
 ```bash
 mypy floship_llm/
+```
+
+## Real-World Tool Examples
+
+The examples/ directory contains comprehensive examples of tool usage:
+
+### Basic Calculator Tools
+```python
+# examples_tools.py - Example 1
+def add_numbers(a: float, b: float) -> float:
+    return a + b
+
+llm.add_tool_from_function(add_numbers)
+response = llm.prompt("What is 15% of 250? Also, what is 25 + 37?")
+```
+
+### Web API Integration
+```python
+# examples_tools.py - Example 2
+def get_current_time(timezone: str = "UTC") -> str:
+    return f"Current time in {timezone}: {datetime.now()}"
+
+def search_data(query: str, category: str = "general") -> str:
+    return f"Search results for '{query}' in {category}"
+
+llm.add_tool_from_function(get_current_time)
+llm.add_tool_from_function(search_data)
+```
+
+### Data Processing Pipeline
+```python
+# examples_tools.py - Example 3
+llm.add_tool_from_function(load_csv_data)
+llm.add_tool_from_function(filter_data)
+llm.add_tool_from_function(calculate_average)
+llm.add_tool_from_function(generate_report)
+
+# LLM chains tools automatically
+response = llm.prompt("Load employee data, filter by salary >= 50k, and generate report")
+```
+
+Run the examples:
+```bash
+python examples_tools.py
 ```
 
 ## License

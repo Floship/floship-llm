@@ -47,6 +47,10 @@ class TestModuleImports:
             "Suggestion",
             "SuggestionsResponse",
             "Labels",
+            "ToolParameter",
+            "ToolFunction",
+            "ToolCall",
+            "ToolResult",
             "lm_json_utils",
             "JSONUtils",
         ]

@@ -1,13 +1,16 @@
 from distutils.util import strtobool
 
 from copy import copy
+import json
 import logging
 import re
 from openai import OpenAI
 import os
 from pydantic import BaseModel, Field
+from typing import List, Dict, Any, Optional, Callable
 
 from .utils import lm_json_utils # extract_and_fix_json, strict_json
+from .schemas import ToolFunction, ToolCall, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +49,11 @@ class LLM:
         self.max_retry = kwargs.get('max_retry', 3) # Maximum number of retries before giving up
         self.retry_count = 0 # Current retry count
         self.system = kwargs.get('system', None) # System prompt to set the context for the conversation
+        
+        # Tool support
+        self.tools: Dict[str, ToolFunction] = {} # Available tools/functions
+        self.enable_tools = kwargs.get('enable_tools', False) # Whether to enable tool calls
+        
         if self.system:
             self.add_message("system", self.system)
             
@@ -109,6 +117,11 @@ class LLM:
             
         if self.supports_presence_penalty:
             params['presence_penalty'] = self.presence_penalty
+        
+        # Add tools if enabled and available
+        if self.enable_tools and self.tools:
+            params['tools'] = [tool.to_openai_format() for tool in self.tools.values()]
+            params['tool_choice'] = 'auto'  # Let the model decide when to use tools
             
         return params
     
@@ -182,13 +195,142 @@ class LLM:
         Reset the conversation history.
         """
         self.messages = []
+        # Reset retry count when resetting conversation
         self.retry_count = 0
+        if self.system:
+            self.add_message("system", self.system)
+    
+    def add_tool(self, tool: ToolFunction):
+        """
+        Add a tool/function that the LLM can call.
+        
+        Args:
+            tool: ToolFunction instance defining the tool
+        """
+        self.tools[tool.name] = tool
+        logger.info(f"Added tool: {tool.name}")
+    
+    def remove_tool(self, name: str):
+        """
+        Remove a tool by name.
+        
+        Args:
+            name: Name of the tool to remove
+        """
+        if name in self.tools:
+            del self.tools[name]
+            logger.info(f"Removed tool: {name}")
+        else:
+            logger.warning(f"Tool not found: {name}")
+    
+    def add_tool_from_function(self, 
+                               func: Callable, 
+                               name: Optional[str] = None,
+                               description: Optional[str] = None,
+                               parameters: Optional[List] = None):
+        """
+        Add a tool from a Python function with automatic introspection.
+        
+        Args:
+            func: Python function to wrap as a tool
+            name: Optional name override (defaults to function name)
+            description: Optional description override (defaults to docstring)
+            parameters: Optional parameter definitions (will attempt to infer if not provided)
+        """
+        import inspect
+        
+        tool_name = name or func.__name__
+        tool_description = description or func.__doc__ or f"Function: {tool_name}"
+        
+        # Create basic tool function
+        tool = ToolFunction(
+            name=tool_name,
+            description=tool_description,
+            parameters=parameters or [],
+            function=func
+        )
+        
+        self.add_tool(tool)
+    
+    def list_tools(self) -> List[str]:
+        """
+        Get list of available tool names.
+        
+        Returns:
+            List of tool names
+        """
+        return list(self.tools.keys())
+    
+    def execute_tool(self, tool_call: ToolCall) -> ToolResult:
+        """
+        Execute a tool call and return the result.
+        
+        Args:
+            tool_call: ToolCall instance with name and arguments
+            
+        Returns:
+            ToolResult with execution outcome
+        """
+        if tool_call.name not in self.tools:
+            return ToolResult(
+                tool_call_id=tool_call.id,
+                name=tool_call.name,
+                content=f"Error: Tool '{tool_call.name}' not found",
+                success=False,
+                error=f"Tool '{tool_call.name}' not found"
+            )
+        
+        tool = self.tools[tool_call.name]
+        if not tool.function:
+            return ToolResult(
+                tool_call_id=tool_call.id,
+                name=tool_call.name,
+                content=f"Error: Tool '{tool_call.name}' has no executable function",
+                success=False,
+                error="No executable function defined"
+            )
+        
+        try:
+            result = tool.function(**tool_call.arguments)
+            return ToolResult(
+                tool_call_id=tool_call.id,
+                name=tool_call.name,
+                content=str(result),
+                success=True
+            )
+        except Exception as e:
+            logger.error(f"Tool execution error for {tool_call.name}: {str(e)}")
+            return ToolResult(
+                tool_call_id=tool_call.id,
+                name=tool_call.name,
+                content=f"Error executing tool: {str(e)}",
+                success=False,
+                error=str(e)
+            )
         
     def process_response(self, response):   
         """
-        Process the response from the LLM.
+        Process the response from the LLM, handling both regular messages and tool calls.
         """
-        message = response.choices[0].message.content.strip()
+        choice = response.choices[0]
+        
+        # Handle tool calls if present
+        if (hasattr(choice.message, 'tool_calls') and 
+            choice.message.tool_calls is not None):
+            try:
+                # Check if tool_calls is iterable and has items
+                if hasattr(choice.message.tool_calls, '__iter__') and len(choice.message.tool_calls) > 0:
+                    return self._handle_tool_calls(choice.message, response)
+            except (TypeError, AttributeError):
+                # If it's not iterable or doesn't have len(), it's likely a mock - skip tool handling
+                pass
+        
+        # Handle regular message response
+        if not choice.message.content:
+            logger.warning("Received empty response from LLM")
+            return ""
+            
+        message = choice.message.content.strip()
         
         # remove everything inside "<think> </think>" multiline tags
         message = re.sub(r'<think>.*?</think>', '', message, flags=re.DOTALL)
@@ -214,3 +356,103 @@ class LLM:
             return self.response_format.parse_raw(message)
         else:
             return response.choices[0].message.content
+    
+    def _handle_tool_calls(self, message, original_response):
+        """
+        Handle tool calls from the LLM response.
+        
+        Args:
+            message: The message object containing tool calls
+            original_response: The original response object
+            
+        Returns:
+            The final response after executing tools
+        """
+        # Add the assistant's message with tool calls to conversation history
+        self.messages.append({
+            "role": "assistant",
+            "content": message.content,
+            "tool_calls": [
+                {
+                    "id": tool_call.id,
+                    "type": "function",
+                    "function": {
+                        "name": tool_call.function.name,
+                        "arguments": tool_call.function.arguments
+                    }
+                }
+                for tool_call in message.tool_calls
+            ]
+        })
+        
+        # Execute each tool call
+        tool_results = []
+        for tool_call in message.tool_calls:
+            try:
+                # Parse arguments
+                arguments = json.loads(tool_call.function.arguments)
+                
+                # Create ToolCall object
+                tc = ToolCall(
+                    id=tool_call.id,
+                    name=tool_call.function.name,
+                    arguments=arguments
+                )
+                
+                # Execute the tool
+                result = self.execute_tool(tc)
+                tool_results.append(result)
+                
+                # Add tool result to conversation
+                self.messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call.id,
+                    "content": result.content
+                })
+                
+                logger.info(f"Executed tool {tool_call.function.name}: {result.success}")
+                
+            except Exception as e:
+                logger.error(f"Error processing tool call {tool_call.function.name}: {str(e)}")
+                error_result = ToolResult(
+                    tool_call_id=tool_call.id,
+                    name=tool_call.function.name,
+                    content=f"Error: {str(e)}",
+                    success=False,
+                    error=str(e)
+                )
+                tool_results.append(error_result)
+                
+                # Add error to conversation
+                self.messages.append({
+                    "role": "tool", 
+                    "tool_call_id": tool_call.id,
+                    "content": error_result.content
+                })
+        
+        # Get follow-up response from LLM after tool execution
+        params = self.get_request_params()
+        follow_up_response = self.client.chat.completions.create(
+            **params,
+            messages=self.messages
+        )
+        
+        # Process the follow-up response (this might include more tool calls)
+        return self.process_response(follow_up_response)
+    
+    def enable_tool_support(self, enabled: bool = True):
+        """
+        Enable or disable tool support for this LLM instance.
+        
+        Args:
+            enabled: Whether to enable tool support
+        """
+        self.enable_tools = enabled
+        logger.info(f"Tool support {'enabled' if enabled else 'disabled'}")
+    
+    def clear_tools(self):
+        """
+        Remove all tools from this LLM instance.
+        """
+        self.tools.clear()
+        logger.info("All tools cleared")

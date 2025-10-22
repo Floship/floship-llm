@@ -5,7 +5,7 @@ This file demonstrates how to use the floship-llm library in your projects.
 """
 
 import os
-from floship_llm import LLM, Labels, ThinkingModel
+from floship_llm import LLM, Labels, ThinkingModel, ToolFunction, ToolParameter
 from pydantic import BaseModel, Field
 from typing import List
 
@@ -126,10 +126,56 @@ def example_json_utils():
     print(f"Strict JSON: {strict}")
 
 
-# Example 6: Configuration Options
+# Example 6: Tool/Function Calling
+def example_tools():
+    """Demonstrate tool/function calling capabilities"""
+    print("\n=== Example 6: Tool/Function Calling ===")
+    
+    # Create LLM with tool support enabled
+    llm = LLM(
+        type='completion',
+        enable_tools=True,
+        temperature=0.3
+    )
+    
+    # Define some useful functions
+    def calculate_area(length: float, width: float) -> float:
+        """Calculate area of a rectangle."""
+        return length * width
+    
+    def convert_temperature(temp: float, from_unit: str, to_unit: str) -> float:
+        """Convert temperature between Celsius and Fahrenheit."""
+        if from_unit.lower() == "celsius" and to_unit.lower() == "fahrenheit":
+            return (temp * 9/5) + 32
+        elif from_unit.lower() == "fahrenheit" and to_unit.lower() == "celsius":
+            return (temp - 32) * 5/9
+        else:
+            return temp
+    
+    def get_word_count(text: str) -> int:
+        """Count words in a text."""
+        return len(text.split())
+    
+    # Add tools to the LLM
+    llm.add_tool_from_function(calculate_area, description="Calculate area of rectangle")
+    llm.add_tool_from_function(convert_temperature, description="Convert temperature units")  
+    llm.add_tool_from_function(get_word_count, description="Count words in text")
+    
+    print(f"Available tools: {llm.list_tools()}")
+    
+    # Now the LLM can use these tools automatically
+    response = llm.prompt("""
+        I have a room that is 12.5 feet long and 8.2 feet wide. 
+        What's the area? Also, if it's 72°F in the room, what's that in Celsius?
+        And can you count the words in this sentence?
+    """)
+    print(f"Response: {response}")
+
+
+# Example 7: Configuration Options
 def example_configuration():
     """Demonstrate various configuration options"""
-    print("\n=== Example 6: Configuration Options ===")
+    print("\n=== Example 7: Configuration Options ===")
     
     llm = LLM(
         type='completion',
@@ -146,10 +192,10 @@ def example_configuration():
     print(f"Response: {response[:200]}...")
 
 
-# Example 7: Error Handling
+# Example 8: Error Handling
 def example_error_handling():
     """Demonstrate error handling"""
-    print("\n=== Example 7: Error Handling ===")
+    print("\n=== Example 8: Error Handling ===")
     
     try:
         # This will fail if environment variables are not set
@@ -188,6 +234,7 @@ def main():
         example_structured_labels()
         example_custom_schema()
         example_json_utils()
+        example_tools()
         example_configuration()
     except Exception as e:
         print(f"\n❌ Error running examples: {e}")

@@ -4,7 +4,16 @@ A reusable LLM client library for interacting with OpenAI-compatible inference e
 """
 
 from .client import LLM
-from .schemas import ThinkingModel, Suggestion, SuggestionsResponse, Labels
+from .schemas import (
+    ThinkingModel, 
+    Suggestion, 
+    SuggestionsResponse, 
+    Labels,
+    ToolParameter,
+    ToolFunction,
+    ToolCall,
+    ToolResult
+)
 from .utils import lm_json_utils, JSONUtils
 
 __version__ = "0.1.0"
@@ -15,6 +24,10 @@ __all__ = [
     "Suggestion",
     "SuggestionsResponse",
     "Labels",
+    "ToolParameter",
+    "ToolFunction", 
+    "ToolCall",
+    "ToolResult",
     "lm_json_utils",
     "JSONUtils",
 ]
