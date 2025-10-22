@@ -29,6 +29,24 @@ pip install -e .
 
 ### For development
 
+Using [uv](https://docs.astral.sh/uv/) (recommended):
+
+```bash
+# Install uv if you haven't already
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Install dependencies and development tools
+uv sync --dev
+
+# Run tests
+uv run pytest
+
+# Run tests with coverage
+uv run pytest --cov=floship_llm --cov-report=html
+```
+
+Or using pip:
+
 ```bash
 pip install -e ".[dev]"
 ```

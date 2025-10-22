@@ -43,6 +43,8 @@ class LLM:
         self.messages = kwargs.get('messages', []) # Conversation history, list of dicts with 'role' and 'content'
         self.max_length = kwargs.get('max_length', 100_000) # If set, will retry if the response exceeds this length
         self.input_tokens_limit = kwargs.get('input_tokens_limit', 40_000) # If set, will trim input messages to fit within this limit
+        self.max_retry = kwargs.get('max_retry', 3) # Maximum number of retries before giving up
+        self.retry_count = 0 # Current retry count
         self.system = kwargs.get('system', None) # System prompt to set the context for the conversation
         if self.system:
             self.add_message("system", self.system)
@@ -141,6 +143,8 @@ class LLM:
         Generate a response from the LLM based on the provided prompt.
         """ 
         if prompt and not retry:
+            # Reset retry count for new prompts
+            self.retry_count = 0
             if system:
                 self.add_message("system", system)
             self.add_message("user", prompt)
@@ -165,20 +169,25 @@ class LLM:
         """
         Retry the last prompt with the same parameters.
         """
-        logger.info("Retrying last prompt.")
-        self.prompt(prompt, retry=True)
+        if self.retry_count >= self.max_retry:
+            logger.warning(f"Maximum retry limit ({self.max_retry}) reached. Giving up on retry.")
+            return None
+        
+        self.retry_count += 1
+        logger.info(f"Retrying last prompt (attempt {self.retry_count}/{self.max_retry}).")
+        return self.prompt(prompt, retry=True)
 
     def reset(self):
         """
         Reset the conversation history.
         """
         self.messages = []
+        self.retry_count = 0
         
     def process_response(self, response):   
         """
         Process the response from the LLM.
         """
-        # try:
         message = response.choices[0].message.content.strip()
         
         # remove everything inside "<think> </think>" multiline tags
@@ -189,7 +198,10 @@ class LLM:
         
         if len(message) > self.max_length:
             logger.warning(f"Max length exceeded: {len(message)} > {self.max_length}")
-            self.retry_prompt()
+            retry_result = self.retry_prompt()
+            if retry_result is not None:
+                return retry_result
+            # If retry failed or max retries reached, continue with current response
         
         self.add_message("assistant", message)
         
@@ -202,6 +214,3 @@ class LLM:
             return self.response_format.parse_raw(message)
         else:
             return response.choices[0].message.content
-        # except Exception as e:
-            # logger.error(f"Error processing response: {e}")
-            # return self.retry_prompt(f"Error processing response: {e}")
