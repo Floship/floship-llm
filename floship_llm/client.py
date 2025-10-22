@@ -371,7 +371,7 @@ class LLM:
         # Add the assistant's message with tool calls to conversation history
         self.messages.append({
             "role": "assistant",
-            "content": message.content,
+            "content": message.content or "",  # Ensure content is never None
             "tool_calls": [
                 {
                     "id": tool_call.id,
@@ -407,7 +407,7 @@ class LLM:
                 self.messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
-                    "content": result.content
+                    "content": str(result.content) if result.content is not None else "Tool executed successfully"
                 })
                 
                 logger.info(f"Executed tool {tool_call.function.name}: {result.success}")
@@ -427,7 +427,7 @@ class LLM:
                 self.messages.append({
                     "role": "tool", 
                     "tool_call_id": tool_call.id,
-                    "content": error_result.content
+                    "content": str(error_result.content) if error_result.content is not None else f"Error executing tool: {tool_call.function.name}"
                 })
         
         # Get follow-up response from LLM after tool execution

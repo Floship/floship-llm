@@ -603,3 +603,68 @@ class TestLLMTools:
             
             # Should process as regular response, not tool call
             assert result == "Regular response"
+    
+    def test_handle_tool_calls_with_none_content(self):
+        """Test tool call handling when message content is None."""
+        with patch('floship_llm.client.OpenAI') as mock_openai:
+            llm = LLM(enable_tools=True)
+            
+            def test_func():
+                return "test result"
+            
+            tool = ToolFunction(
+                name="test_tool",
+                description="Test tool",
+                parameters=[],
+                function=test_func
+            )
+            llm.add_tool(tool)
+            
+            # Mock tool call with None content
+            mock_tool_call = Mock()
+            mock_tool_call.id = "call_123"
+            mock_tool_call.function.name = "test_tool"
+            mock_tool_call.function.arguments = "{}"
+            
+            mock_message = Mock()
+            mock_message.content = None  # This is the key issue we're testing
+            mock_message.tool_calls = [mock_tool_call]
+            
+            mock_choice = Mock()
+            mock_choice.message = mock_message
+            
+            mock_response = Mock()
+            mock_response.choices = [mock_choice]
+            
+            # Mock follow-up response
+            mock_follow_up_message = Mock()
+            mock_follow_up_message.content = "Tool executed successfully"
+            mock_follow_up_message.tool_calls = None
+            
+            mock_follow_up_choice = Mock()
+            mock_follow_up_choice.message = mock_follow_up_message
+            
+            mock_follow_up_response = Mock()
+            mock_follow_up_response.choices = [mock_follow_up_choice]
+            
+            mock_openai.return_value.chat.completions.create.return_value = mock_follow_up_response
+            
+            # This should handle None content gracefully
+            result = llm.process_response(mock_response)
+            
+            # Should have proper messages in conversation
+            assistant_messages = [msg for msg in llm.messages if msg.get('role') == 'assistant']
+            assert len(assistant_messages) > 0
+            # The first assistant message (with tool calls) should have empty content, not None
+            tool_call_message = None
+            for msg in assistant_messages:
+                if 'tool_calls' in msg:
+                    tool_call_message = msg
+                    break
+            assert tool_call_message is not None
+            assert tool_call_message['content'] == ""
+            
+            tool_messages = [msg for msg in llm.messages if msg.get('role') == 'tool']
+            assert len(tool_messages) > 0
+            # Tool result should have proper content
+            assert tool_messages[0]['content'] == "test result"
