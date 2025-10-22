@@ -432,9 +432,13 @@ class LLM:
         
         # Get follow-up response from LLM after tool execution
         params = self.get_request_params()
+        
+        # Validate and sanitize messages before sending to LLM
+        validated_messages = self._validate_messages_for_api(self.messages)
+        
         follow_up_response = self.client.chat.completions.create(
             **params,
-            messages=self.messages
+            messages=validated_messages
         )
         
         # Process the follow-up response (this might include more tool calls)
@@ -456,3 +460,51 @@ class LLM:
         """
         self.tools.clear()
         logger.info("All tools cleared")
+    
+    def _validate_messages_for_api(self, messages):
+        """
+        Validate and sanitize messages before sending to LLM API.
+        Ensures all messages have proper content and structure.
+        
+        Args:
+            messages: List of conversation messages
+            
+        Returns:
+            List of validated messages safe for API consumption
+        """
+        validated_messages = []
+        
+        for msg in messages:
+            if not isinstance(msg, dict):
+                logger.warning(f"Skipping invalid message type: {type(msg)}")
+                continue
+                
+            # Create a copy to avoid modifying original
+            validated_msg = msg.copy()
+            
+            # Ensure content is always a string
+            if 'content' not in validated_msg or validated_msg['content'] is None:
+                if validated_msg.get('role') == 'system':
+                    validated_msg['content'] = ""
+                elif validated_msg.get('role') == 'user':
+                    validated_msg['content'] = ""
+                elif validated_msg.get('role') == 'assistant':
+                    # Assistant messages with tool calls can have empty content
+                    validated_msg['content'] = ""
+                elif validated_msg.get('role') == 'tool':
+                    # Tool messages must have content
+                    validated_msg['content'] = "Tool executed successfully"
+                else:
+                    validated_msg['content'] = ""
+            
+            # Ensure content is a string
+            validated_msg['content'] = str(validated_msg['content'])
+            
+            # Ensure role is present
+            if 'role' not in validated_msg:
+                logger.warning("Skipping message without role")
+                continue
+                
+            validated_messages.append(validated_msg)
+        
+        return validated_messages
