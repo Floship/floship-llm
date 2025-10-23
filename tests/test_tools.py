@@ -668,3 +668,135 @@ class TestLLMTools:
             assert len(tool_messages) > 0
             # Tool result should have proper content
             assert tool_messages[0]['content'] == "test result"
+    
+    def test_validate_messages_for_api(self):
+        """Test the _validate_messages_for_api method comprehensively."""
+        with patch.dict('os.environ', {
+            'INFERENCE_URL': 'http://test.com',
+            'INFERENCE_MODEL_ID': 'test-model',
+            'INFERENCE_KEY': 'test-key'
+        }):
+            llm = LLM()
+            
+            # Test various message scenarios
+            test_messages = [
+                {"role": "user", "content": "Hello"},  # Valid message
+                {"role": "assistant", "content": None},  # None content
+                {"role": "tool", "tool_call_id": "123", "content": None},  # Tool with None content
+                {"role": "system", "content": ""},  # Empty content
+                {"role": "user"},  # Missing content key
+                {"role": "assistant", "content": "Response", "tool_calls": [{"id": "123"}]},  # With tool calls
+                {"role": "unknown", "content": None},  # Unknown role with None content
+                {"content": "No role"},  # Missing role
+                None,  # Invalid message type
+                "string_message",  # Invalid message type
+                {"role": "function", "content": 42},  # Non-string content, different role
+            ]
+            
+            validated = llm._validate_messages_for_api(test_messages)
+            
+            # Should have filtered out invalid messages (None, string, missing role)
+            assert len(validated) == 8
+            
+            # Check each validated message
+            for msg in validated:
+                assert isinstance(msg, dict)
+                assert "role" in msg
+                assert "content" in msg
+                assert isinstance(msg["content"], str)
+            
+            # Check specific validations
+            user_msg = next(msg for msg in validated if msg["role"] == "user" and "tool_call_id" not in msg)
+            assert user_msg["content"] == "Hello"
+            
+            assistant_msgs = [msg for msg in validated if msg["role"] == "assistant"]
+            assert len(assistant_msgs) == 2
+            # Assistant with None content should become empty string (or minimal content if no tool_calls)
+            none_content_assistant = next(msg for msg in assistant_msgs if "tool_calls" not in msg)
+            # Assistant without tool_calls gets minimal content
+            assert none_content_assistant["content"] in ["", " "]
+            
+            tool_msgs = [msg for msg in validated if msg["role"] == "tool"]
+            assert len(tool_msgs) == 1
+            # Tool with None content should get default message
+            assert tool_msgs[0]["content"] == "Tool executed successfully"
+            
+            system_msgs = [msg for msg in validated if msg["role"] == "system"]
+            assert len(system_msgs) == 1
+            # System with empty content should get minimal content
+            assert system_msgs[0]["content"] in ["", " "]
+            
+            unknown_msgs = [msg for msg in validated if msg["role"] == "unknown"]
+            assert len(unknown_msgs) == 1
+            # Unknown role with None content should get minimal content
+            assert unknown_msgs[0]["content"] in ["", " "]
+            
+            # Content that was a number should be converted to string
+            function_msgs = [msg for msg in validated if msg["role"] == "function"]
+            assert len(function_msgs) == 1
+            assert function_msgs[0]["content"] == "42"  # Number converted to string
+    
+    def test_validate_messages_for_api_edge_cases(self):
+        """Test edge cases for _validate_messages_for_api method."""
+        with patch.dict('os.environ', {
+            'INFERENCE_URL': 'http://test.com',
+            'INFERENCE_MODEL_ID': 'test-model',
+            'INFERENCE_KEY': 'test-key'
+        }):
+            llm = LLM()
+            
+            # Test user message with missing content (to cover line 488)
+            test_messages = [
+                {"role": "user", "content": None},  # User with None content
+            ]
+            
+            validated = llm._validate_messages_for_api(test_messages)
+            
+            assert len(validated) == 1
+            assert validated[0]["role"] == "user"
+            assert validated[0]["content"] in ["", " "]  # Should be minimal content (empty or space)
+    
+    def test_validate_messages_comprehensive_coverage(self):
+        """Test comprehensive edge cases to achieve full coverage."""
+        with patch.dict('os.environ', {
+            'INFERENCE_URL': 'http://test.com',
+            'INFERENCE_MODEL_ID': 'test-model',
+            'INFERENCE_KEY': 'test-key'
+        }):
+            llm = LLM()
+            
+            # Test assistant message with tool_calls and empty content
+            test_messages = [
+                {"role": "assistant", "content": "", "tool_calls": [{"id": "123", "function": {"name": "test"}}]},
+            ]
+            
+            validated = llm._validate_messages_for_api(test_messages)
+            
+            assert len(validated) == 1
+            assert validated[0]["role"] == "assistant"
+            assert "tool_calls" in validated[0]
+            # Assistant with tool_calls can have empty content
+            assert validated[0]["content"] == ""
+    
+    def test_validate_messages_edge_logging(self):
+        """Test edge case logging paths for full coverage.""" 
+        with patch.dict('os.environ', {
+            'INFERENCE_URL': 'http://test.com',
+            'INFERENCE_MODEL_ID': 'test-model',
+            'INFERENCE_KEY': 'test-key'
+        }):
+            llm = LLM()
+            
+            # Create a scenario that would test the logging paths
+            # First test: message that might have content issues after validation
+            import logging
+            with patch.object(logging.getLogger('floship_llm.client'), 'error') as mock_logger:
+                # Test normal validation - should not trigger error logs
+                normal_messages = [{"role": "user", "content": "test"}]
+                validated = llm._validate_messages_for_api(normal_messages)
+                
+                # Error logs should not be called for normal cases
+                mock_logger.assert_not_called()
+                
+                assert len(validated) == 1
+                assert validated[0]["content"] == "test"

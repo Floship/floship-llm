@@ -167,9 +167,13 @@ class LLM:
         
         params = self.get_request_params()
         logger.info(f"Prompting LLM with parameters: {params}")
+        
+        # Validate and sanitize messages before sending to LLM
+        validated_messages = self._validate_messages_for_api(self.messages)
+        
         response = self.client.chat.completions.create(
             **params,
-            messages=self.messages
+            messages=validated_messages
         )
         
         response = self.process_response(response)
@@ -474,37 +478,54 @@ class LLM:
         """
         validated_messages = []
         
-        for msg in messages:
+        for i, msg in enumerate(messages):
             if not isinstance(msg, dict):
-                logger.warning(f"Skipping invalid message type: {type(msg)}")
+                logger.warning(f"Skipping invalid message type at index {i}: {type(msg)}")
                 continue
                 
             # Create a copy to avoid modifying original
             validated_msg = msg.copy()
             
-            # Ensure content is always a string
-            if 'content' not in validated_msg or validated_msg['content'] is None:
-                if validated_msg.get('role') == 'system':
-                    validated_msg['content'] = ""
-                elif validated_msg.get('role') == 'user':
-                    validated_msg['content'] = ""
-                elif validated_msg.get('role') == 'assistant':
-                    # Assistant messages with tool calls can have empty content
-                    validated_msg['content'] = ""
-                elif validated_msg.get('role') == 'tool':
-                    # Tool messages must have content
-                    validated_msg['content'] = "Tool executed successfully"
-                else:
-                    validated_msg['content'] = ""
+            # Ensure role is present first
+            if 'role' not in validated_msg:
+                logger.warning(f"Skipping message at index {i} without role: {validated_msg}")
+                continue
             
-            # Ensure content is a string
+            # Ensure content field exists and is not None
+            if 'content' not in validated_msg:
+                logger.warning(f"Message at index {i} missing content field, adding empty content")
+                validated_msg['content'] = ""
+            elif validated_msg['content'] is None:
+                logger.warning(f"Message at index {i} has None content, setting to empty string")
+                validated_msg['content'] = ""
+            
+            # Apply role-specific defaults for empty content
+            if not validated_msg['content']:  # This catches empty strings too
+                if validated_msg.get('role') == 'tool':
+                    # Tool messages must have meaningful content
+                    validated_msg['content'] = "Tool executed successfully"
+                    logger.info(f"Set default content for tool message at index {i}")
+                # For all other roles (system, user, assistant), empty string is OK
+            
+            # Ensure content is always a string (convert any other types)
             validated_msg['content'] = str(validated_msg['content'])
             
-            # Ensure role is present
-            if 'role' not in validated_msg:
-                logger.warning("Skipping message without role")
-                continue
-                
+            # Final validation - ensure content is not empty for OpenAI API
+            if not validated_msg['content'] and validated_msg.get('role') not in ['assistant']:
+                # Assistant messages can have empty content if they have tool_calls
+                if validated_msg.get('role') != 'assistant' or 'tool_calls' not in validated_msg:
+                    validated_msg['content'] = " "  # Use single space instead of empty string
+                    logger.info(f"Set minimal content for message at index {i} with role {validated_msg.get('role')}")
+            
             validated_messages.append(validated_msg)
+            logger.debug(f"Validated message {i}: role={validated_msg.get('role')}, content_length={len(validated_msg['content'])}")
         
+        # Final check - log any potential issues
+        for i, msg in enumerate(validated_messages):
+            if 'content' not in msg or msg['content'] is None:
+                logger.error(f"VALIDATION FAILED: Message {i} still has invalid content: {msg}")
+            elif not isinstance(msg['content'], str):
+                logger.error(f"VALIDATION FAILED: Message {i} content is not string: {type(msg['content'])}")
+        
+        logger.info(f"Validated {len(validated_messages)} messages from {len(messages)} original messages")
         return validated_messages
