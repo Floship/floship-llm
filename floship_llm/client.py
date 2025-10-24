@@ -296,10 +296,28 @@ class LLM:
         
         try:
             result = tool.function(**tool_call.arguments)
+            
+            # Validate and sanitize tool result content
+            if result is None:
+                content = "Tool executed successfully (no return value)"
+                logger.warning(f"Tool {tool_call.name} returned None, using default content")
+            elif str(result).strip() == "":
+                content = "Tool executed successfully (empty result)"
+                logger.warning(f"Tool {tool_call.name} returned empty result, using default content")
+            elif str(result).lower() in ["none", "null"]:
+                content = "Tool executed successfully (null result)"
+                logger.warning(f"Tool {tool_call.name} returned null-like result, using default content")
+            else:
+                content = str(result).strip()
+                # Ensure content is not just whitespace
+                if not content:
+                    content = "Tool executed successfully (whitespace result)"
+                    logger.warning(f"Tool {tool_call.name} returned only whitespace, using default content")
+            
             return ToolResult(
                 tool_call_id=tool_call.id,
                 name=tool_call.name,
-                content=str(result),
+                content=content,
                 success=True
             )
         except Exception as e:
@@ -407,11 +425,12 @@ class LLM:
                 result = self.execute_tool(tc)
                 tool_results.append(result)
                 
-                # Add tool result to conversation
+                # Add tool result to conversation with robust content validation
+                tool_content = self._sanitize_tool_content(result.content, tool_call.function.name)
                 self.messages.append({
                     "role": "tool",
                     "tool_call_id": tool_call.id,
-                    "content": str(result.content) if result.content is not None else "Tool executed successfully"
+                    "content": tool_content
                 })
                 
                 logger.info(f"Executed tool {tool_call.function.name}: {result.success}")
@@ -427,11 +446,12 @@ class LLM:
                 )
                 tool_results.append(error_result)
                 
-                # Add error to conversation
+                # Add error to conversation with robust content validation
+                error_content = self._sanitize_tool_content(error_result.content, tool_call.function.name, is_error=True)
                 self.messages.append({
                     "role": "tool", 
                     "tool_call_id": tool_call.id,
-                    "content": str(error_result.content) if error_result.content is not None else f"Error executing tool: {tool_call.function.name}"
+                    "content": error_content
                 })
         
         # Get follow-up response from LLM after tool execution
@@ -529,3 +549,42 @@ class LLM:
         
         logger.info(f"Validated {len(validated_messages)} messages from {len(messages)} original messages")
         return validated_messages
+    
+    def _sanitize_tool_content(self, content, tool_name: str, is_error: bool = False) -> str:
+        """
+        Sanitize tool result content to ensure it's API-safe.
+        
+        Args:
+            content: The raw tool result content
+            tool_name: Name of the tool for logging
+            is_error: Whether this is an error result
+            
+        Returns:
+            API-safe content string
+        """
+        if content is None:
+            default_msg = f"Error executing tool: {tool_name}" if is_error else f"Tool {tool_name} executed successfully (no return value)"
+            logger.warning(f"Tool {tool_name} content is None, using default: {default_msg}")
+            return default_msg
+        
+        # Convert to string and strip whitespace
+        content_str = str(content).strip()
+        
+        if not content_str:
+            default_msg = f"Error executing tool: {tool_name} (empty result)" if is_error else f"Tool {tool_name} executed successfully (empty result)"
+            logger.warning(f"Tool {tool_name} returned empty content, using default: {default_msg}")
+            return default_msg
+        
+        # Check for problematic string representations
+        if content_str.lower() in ["none", "null", "undefined"]:
+            default_msg = f"Error executing tool: {tool_name} (null result)" if is_error else f"Tool {tool_name} executed successfully (null result)"
+            logger.warning(f"Tool {tool_name} returned null-like content '{content_str}', using default: {default_msg}")
+            return default_msg
+        
+        # Ensure minimum length for API compatibility
+        if len(content_str) < 1:
+            default_msg = f"Error executing tool: {tool_name}" if is_error else f"Tool {tool_name} executed successfully"
+            logger.warning(f"Tool {tool_name} content too short, using default: {default_msg}")
+            return default_msg
+        
+        return content_str

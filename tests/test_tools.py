@@ -756,6 +756,89 @@ class TestLLMTools:
             assert validated[0]["role"] == "user"
             assert validated[0]["content"] in ["", " "]  # Should be minimal content (empty or space)
     
+    def test_tool_content_sanitization(self):
+        """Test the _sanitize_tool_content method for empty/None results."""
+        with patch.dict('os.environ', {
+            'INFERENCE_URL': 'http://test.com',
+            'INFERENCE_MODEL_ID': 'test-model',
+            'INFERENCE_KEY': 'test-key'
+        }):
+            llm = LLM()
+            
+            # Test various problematic tool results
+            test_cases = [
+                (None, "Tool test_tool executed successfully (no return value)"),
+                ("", "Tool test_tool executed successfully (empty result)"),
+                ("   ", "Tool test_tool executed successfully (empty result)"),
+                ("None", "Tool test_tool executed successfully (null result)"),
+                ("null", "Tool test_tool executed successfully (null result)"),
+                ("NULL", "Tool test_tool executed successfully (null result)"),
+                ("Valid result", "Valid result"),
+            ]
+            
+            for content, expected in test_cases:
+                result = llm._sanitize_tool_content(content, "test_tool")
+                assert result == expected, f"Failed for content '{content}': got '{result}', expected '{expected}'"
+            
+            # Test error cases
+            error_cases = [
+                (None, "Error executing tool: test_tool"),
+                ("", "Error executing tool: test_tool (empty result)"),
+                ("None", "Error executing tool: test_tool (null result)"),
+            ]
+            
+            for content, expected in error_cases:
+                result = llm._sanitize_tool_content(content, "test_tool", is_error=True)
+                assert result == expected, f"Failed for error content '{content}': got '{result}', expected '{expected}'"
+    
+    def test_execute_tool_with_problematic_results(self):
+        """Test execute_tool method with various problematic return values."""
+        with patch.dict('os.environ', {
+            'INFERENCE_URL': 'http://test.com',
+            'INFERENCE_MODEL_ID': 'test-model',
+            'INFERENCE_KEY': 'test-key'
+        }):
+            llm = LLM()
+            
+            # Test tool that returns None
+            def none_tool():
+                return None
+            
+            tool_none = ToolFunction(name="none_tool", description="Returns None", parameters=[], function=none_tool)
+            llm.add_tool(tool_none)
+            
+            call_none = ToolCall(id="test1", name="none_tool", arguments={})
+            result_none = llm.execute_tool(call_none)
+            
+            assert result_none.success is True
+            assert "Tool executed successfully (no return value)" in result_none.content
+            
+            # Test tool that returns empty string
+            def empty_tool():
+                return ""
+            
+            tool_empty = ToolFunction(name="empty_tool", description="Returns empty", parameters=[], function=empty_tool)
+            llm.add_tool(tool_empty)
+            
+            call_empty = ToolCall(id="test2", name="empty_tool", arguments={})
+            result_empty = llm.execute_tool(call_empty)
+            
+            assert result_empty.success is True
+            assert "Tool executed successfully (empty result)" in result_empty.content
+            
+            # Test tool that returns "None" string
+            def none_string_tool():
+                return "None"
+            
+            tool_none_str = ToolFunction(name="none_string_tool", description="Returns 'None'", parameters=[], function=none_string_tool)
+            llm.add_tool(tool_none_str)
+            
+            call_none_str = ToolCall(id="test3", name="none_string_tool", arguments={})
+            result_none_str = llm.execute_tool(call_none_str)
+            
+            assert result_none_str.success is True
+            assert "Tool executed successfully (null result)" in result_none_str.content
+    
     def test_validate_messages_comprehensive_coverage(self):
         """Test comprehensive edge cases to achieve full coverage."""
         with patch.dict('os.environ', {
