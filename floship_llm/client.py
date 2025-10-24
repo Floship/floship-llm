@@ -234,10 +234,9 @@ class LLM:
         
         for attempt in range(max_retries):
             try:
-                logger.info(f"API call attempt {attempt + 1}/{max_retries}")
                 response = api_func(*args, **kwargs)
                 
-                # Success - reset any retry tracking
+                # Success - log only if retry occurred
                 if attempt > 0:
                     logger.info(f"API call succeeded after {attempt + 1} attempts")
                     
@@ -558,27 +557,6 @@ class LLM:
         # Validate and sanitize messages before sending to LLM
         validated_messages = self._validate_messages_for_api(self.messages)
         
-        # FINAL SAFETY CHECK before API call
-        logger.info(f"🚀 Making follow-up API call with {len(validated_messages)} messages...")
-        self._final_api_safety_check(validated_messages)
-        
-        # ABSOLUTE EMERGENCY CHECK - scan every message one last time
-        for i, msg in enumerate(validated_messages):
-            content = msg.get('content', '')
-            if content == '':
-                logger.error(f"🚨 CRITICAL: Found empty content at message {i} after ALL validation!")
-                # Emergency fix
-                if msg.get('role') == 'assistant' and 'tool_calls' in msg:
-                    msg['content'] = ' '  # Space for assistant with tool_calls
-                else:
-                    msg['content'] = '.'  # Period for others
-                logger.info(f"🚨 EMERGENCY FIX: Set emergency content for message {i}")
-        
-        # Debug log specifically for message 5 if it exists
-        if len(validated_messages) > 5:
-            msg_5 = validated_messages[5]
-            logger.info(f"🔍 DEBUG MESSAGE 5: role='{msg_5.get('role', 'MISSING')}', content='{msg_5.get('content', 'MISSING')}', has_tool_calls={'tool_calls' in msg_5}")
-        
         follow_up_response = self._api_call_with_retry(
             self.client.chat.completions.create,
             **params,
@@ -609,7 +587,6 @@ class LLM:
         """
         Validate and sanitize messages before sending to LLM API.
         Ensures all messages have proper content and structure.
-        AGGRESSIVE VALIDATION to prevent any API content errors.
         
         Args:
             messages: List of conversation messages
@@ -617,14 +594,11 @@ class LLM:
         Returns:
             List of validated messages safe for API consumption
         """
-        logger.info(f"🔍 VALIDATING {len(messages)} messages for API...")
         validated_messages = []
         
         for i, msg in enumerate(messages):
-            logger.debug(f"Processing message {i}: {msg}")
-            
             if not isinstance(msg, dict):
-                logger.warning(f"❌ Skipping invalid message type at index {i}: {type(msg)}")
+                logger.warning(f"Skipping invalid message type at index {i}: {type(msg)}")
                 continue
                 
             # Create a deep copy to avoid modifying original
@@ -632,192 +606,73 @@ class LLM:
             for key, value in msg.items():
                 validated_msg[key] = value
             
-            # Ensure role is present first
+            # Ensure role is present and valid
             if 'role' not in validated_msg or not validated_msg['role']:
-                logger.warning(f"❌ Skipping message at index {i} without role: {validated_msg}")
+                logger.warning(f"Skipping message at index {i} without role")
                 continue
                 
-            # Ensure role is a valid string
             validated_msg['role'] = str(validated_msg['role']).strip()
             if not validated_msg['role']:
-                logger.warning(f"❌ Skipping message at index {i} with empty role")
+                logger.warning(f"Skipping message at index {i} with empty role")
                 continue
             
-            # AGGRESSIVE CONTENT VALIDATION
-            original_content = validated_msg.get('content')
-            
-            # Handle missing content field
+            # Handle content validation
             if 'content' not in validated_msg:
-                logger.warning(f"⚠️ Message {i} missing content field")
                 validated_msg['content'] = "Message content unavailable"
-            
-            # Handle None content
             elif validated_msg['content'] is None:
-                logger.warning(f"⚠️ Message {i} has None content")
                 validated_msg['content'] = "Message content unavailable"
             
-            # Convert content to string and validate
+            # Convert content to string
             try:
                 validated_msg['content'] = str(validated_msg['content'])
             except Exception as e:
-                logger.error(f"❌ Failed to convert content to string for message {i}: {e}")
+                logger.error(f"Failed to convert content to string for message {i}: {e}")
                 validated_msg['content'] = "Message content conversion failed"
             
             # Apply role-specific content requirements
             role = validated_msg['role'].lower()
             content = validated_msg['content'].strip()
             
-            if not content:  # Empty or whitespace-only content
+            if not content:
                 if role == 'tool':
                     validated_msg['content'] = "Tool executed successfully"
-                    logger.info(f"✅ Set default tool content for message {i}")
                 elif role == 'assistant' and 'tool_calls' in validated_msg:
-                    # Assistant with tool_calls can have empty content
-                    validated_msg['content'] = ""
-                    logger.info(f"✅ Allowed empty content for assistant with tool_calls at message {i}")
+                    validated_msg['content'] = " "  # Minimal space for API compatibility
                 elif role in ['user', 'system']:
                     validated_msg['content'] = "Content unavailable"
-                    logger.info(f"✅ Set default content for {role} message {i}")
                 else:
                     validated_msg['content'] = "Content unavailable"
-                    logger.info(f"✅ Set generic default content for {role} message {i}")
             else:
-                # Content exists but might need role-specific handling
+                # Fix tool content if needed
                 if role == 'tool' and validated_msg['content'] in ["Message content unavailable", "Content unavailable"]:
                     validated_msg['content'] = "Tool executed successfully"
-                    logger.info(f"✅ Fixed tool content for message {i}")
             
-            # FINAL AGGRESSIVE VALIDATION - NO EMPTY CONTENT ALLOWED
-            final_content = validated_msg['content']
-            
-            # The OpenAI API appears to be very strict about content
-            # Ensure NO message has empty content, even assistants
-            if final_content == "":
+            # Final validation - ensure no empty content except for assistant with tool_calls
+            if validated_msg['content'] == "":
                 if role == 'assistant' and 'tool_calls' in validated_msg:
-                    # Even assistant with tool_calls should have some content for API safety
-                    validated_msg['content'] = " "  # Single space (minimal valid content)
-                    logger.info(f"✅ Set minimal space content for assistant with tool_calls at message {i}")
+                    validated_msg['content'] = " "
                 else:
-                    validated_msg['content'] = "."  # Minimal non-empty content
-                    logger.info(f"✅ Set minimal content '.' for message {i}")
+                    validated_msg['content'] = "."
             
-            # Double-check: ensure content length is never zero
-            if len(validated_msg['content']) == 0:
-                validated_msg['content'] = "."
-                logger.warning(f"⚠️ Emergency fix: set minimal content for message {i}")
-                
-            # Triple-check: ensure content is never just whitespace if it would be empty
+            # Ensure content is never just whitespace
             if not validated_msg['content'].strip():
                 if role == 'assistant' and 'tool_calls' in validated_msg:
-                    validated_msg['content'] = " "  # Keep single space for tool_calls
+                    validated_msg['content'] = " "
                 else:
-                    validated_msg['content'] = "."  # Use period for others
-                logger.warning(f"⚠️ Fixed whitespace-only content for message {i}")
-            
-            # Log the validation result
-            logger.info(f"✅ Message {i} validated: role='{validated_msg['role']}', content_len={len(validated_msg['content'])}, content_preview='{validated_msg['content'][:50]}...'")
+                    validated_msg['content'] = "."
             
             validated_messages.append(validated_msg)
         
-        # FINAL SAFETY CHECK - This should never find issues now
-        logger.info(f"🔍 FINAL SAFETY CHECK on {len(validated_messages)} validated messages...")
+        # Final safety check
         for i, msg in enumerate(validated_messages):
-            issues = []
-            
-            if 'content' not in msg:
-                issues.append("missing content field")
-            elif msg['content'] is None:
-                issues.append("None content")
-            elif not isinstance(msg['content'], str):
-                issues.append(f"content is {type(msg['content'])}, not string")
-            elif len(msg['content']) == 0 and msg.get('role') != 'assistant':
-                issues.append("empty content for non-assistant")
-            elif len(msg['content']) == 0 and msg.get('role') == 'assistant' and 'tool_calls' not in msg:
-                issues.append("empty content for assistant without tool_calls")
-                
-            if 'role' not in msg:
-                issues.append("missing role field")
-            elif not msg['role']:
-                issues.append("empty role")
-                
-            if issues:
-                logger.error(f"🚨 CRITICAL: Message {i} failed final validation: {issues} - {msg}")
-                # Emergency fix
+            if 'content' not in msg or msg['content'] is None or (msg['content'] == "" and msg.get('role') != 'assistant'):
+                logger.error(f"Critical validation error at message {i}")
                 if 'content' not in msg or msg['content'] is None or msg['content'] == "":
                     msg['content'] = "Emergency content fix"
                 if 'role' not in msg or not msg['role']:
                     msg['role'] = "user"
-                logger.error(f"🚨 Applied emergency fix to message {i}: {msg}")
-        
-        logger.info(f"✅ VALIDATION COMPLETE: {len(validated_messages)} messages ready for API")
-        
-        # Log the final message structure for debugging
-        self._debug_log_messages(validated_messages)
         
         return validated_messages
-    
-    def _debug_log_messages(self, messages):
-        """Debug log messages to help troubleshoot API issues."""
-        logger.info(f"📋 DEBUG: Final message structure for API call:")
-        for i, msg in enumerate(messages):
-            role = msg.get('role', 'MISSING_ROLE')
-            content = msg.get('content', 'MISSING_CONTENT')
-            content_preview = str(content)[:100] if content else 'EMPTY'
-            has_tool_calls = 'tool_calls' in msg
-            
-            logger.info(f"  [{i}] role='{role}', content_len={len(str(content)) if content else 0}, has_tool_calls={has_tool_calls}")
-            logger.info(f"      content_preview: '{content_preview}{'...' if len(str(content)) > 100 else ''}'")
-            
-            # Special validation for the problematic index
-            if i == 5:  # The specific index from the error
-                logger.info(f"🎯 SPECIAL ATTENTION - Message[5] (the problematic one):")
-                logger.info(f"    Full message: {msg}")
-                logger.info(f"    Content type: {type(content)}")
-                logger.info(f"    Content repr: {repr(content)}")
-                logger.info(f"    Content bool: {bool(content)}")
-                if content == "":
-                    logger.warning(f"⚠️ Message[5] has empty string content - this might cause the API error!")
-                if content is None:
-                    logger.error(f"🚨 Message[5] has None content - this WILL cause API error!")
-                if 'content' not in msg:
-                    logger.error(f"🚨 Message[5] missing 'content' field - this WILL cause API error!")
-    
-    def _final_api_safety_check(self, messages):
-        """Final safety check before API call to prevent content errors."""
-        logger.info("🔒 FINAL API SAFETY CHECK...")
-        
-        for i, msg in enumerate(messages):
-            # Check for the exact conditions that cause the API error
-            if not isinstance(msg, dict):
-                logger.error(f"🚨 CRITICAL: Message {i} is not a dict: {type(msg)}")
-                raise ValueError(f"Invalid message type at index {i}: {type(msg)}")
-                
-            if 'content' not in msg:
-                logger.error(f"🚨 CRITICAL: Message {i} missing 'content' field")
-                raise ValueError(f"Message {i} missing 'content' field")
-                
-            if msg['content'] is None:
-                logger.error(f"🚨 CRITICAL: Message {i} has None content")
-                raise ValueError(f"Message {i} has None content")
-                
-            if not isinstance(msg['content'], str):
-                logger.error(f"🚨 CRITICAL: Message {i} content is not string: {type(msg['content'])}")
-                raise ValueError(f"Message {i} content is not string: {type(msg['content'])}")
-                
-            # OpenAI API requires content for most message types
-            if msg['content'] == "" and msg.get('role') != 'assistant':
-                logger.error(f"🚨 CRITICAL: Message {i} has empty content for role {msg.get('role')}")
-                # Emergency fix
-                msg['content'] = "."
-                logger.error(f"🚨 Applied emergency content fix to message {i}")
-                
-            if msg['content'] == "" and msg.get('role') == 'assistant' and 'tool_calls' not in msg:
-                logger.error(f"🚨 CRITICAL: Message {i} assistant has empty content without tool_calls")
-                # Emergency fix
-                msg['content'] = "."
-                logger.error(f"🚨 Applied emergency content fix to message {i}")
-        
-        logger.info("✅ Final safety check passed - all messages are API-safe")
     
     def _sanitize_tool_content(self, content, tool_name: str, is_error: bool = False) -> str:
         """
