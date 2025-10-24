@@ -171,6 +171,27 @@ class LLM:
         # Validate and sanitize messages before sending to LLM
         validated_messages = self._validate_messages_for_api(self.messages)
         
+        # FINAL SAFETY CHECK before API call
+        logger.info(f"🚀 Making API call with {len(validated_messages)} messages...")
+        self._final_api_safety_check(validated_messages)
+        
+        # ABSOLUTE EMERGENCY CHECK - scan every message one last time
+        for i, msg in enumerate(validated_messages):
+            content = msg.get('content', '')
+            if content == '':
+                logger.error(f"🚨 CRITICAL: Found empty content at message {i} after ALL validation!")
+                # Emergency fix
+                if msg.get('role') == 'assistant' and 'tool_calls' in msg:
+                    msg['content'] = ' '  # Space for assistant with tool_calls
+                else:
+                    msg['content'] = '.'  # Period for others
+                logger.info(f"🚨 EMERGENCY FIX: Set emergency content for message {i}")
+        
+        # Debug log specifically for message 5 if it exists
+        if len(validated_messages) > 5:
+            msg_5 = validated_messages[5]
+            logger.info(f"🔍 DEBUG MESSAGE 5: role='{msg_5.get('role', 'MISSING')}', content='{msg_5.get('content', 'MISSING')}', has_tool_calls={'tool_calls' in msg_5}")
+        
         response = self.client.chat.completions.create(
             **params,
             messages=validated_messages
@@ -390,10 +411,9 @@ class LLM:
         Returns:
             The final response after executing tools
         """
-        # Add the assistant's message with tool calls to conversation history
-        self.messages.append({
+        # Build the assistant's message with tool calls. Ensure content is never empty
+        assistant_message = {
             "role": "assistant",
-            "content": message.content or "",  # Ensure content is never None
             "tool_calls": [
                 {
                     "id": tool_call.id,
@@ -405,7 +425,21 @@ class LLM:
                 }
                 for tool_call in message.tool_calls
             ]
-        })
+        }
+
+        # Use the assistant content if provided and non-empty, otherwise provide a minimal valid content
+        try:
+            raw_content = message.content if hasattr(message, 'content') else None
+        except Exception:
+            raw_content = None
+
+        if raw_content is not None and str(raw_content).strip():
+            assistant_message["content"] = str(raw_content).strip()
+        else:
+            # OpenAI API rejects truly empty content fields — use a single space as a minimal valid value
+            assistant_message["content"] = " "
+
+        self.messages.append(assistant_message)
         
         # Execute each tool call
         tool_results = []
@@ -459,6 +493,27 @@ class LLM:
         
         # Validate and sanitize messages before sending to LLM
         validated_messages = self._validate_messages_for_api(self.messages)
+        
+        # FINAL SAFETY CHECK before API call
+        logger.info(f"🚀 Making follow-up API call with {len(validated_messages)} messages...")
+        self._final_api_safety_check(validated_messages)
+        
+        # ABSOLUTE EMERGENCY CHECK - scan every message one last time
+        for i, msg in enumerate(validated_messages):
+            content = msg.get('content', '')
+            if content == '':
+                logger.error(f"🚨 CRITICAL: Found empty content at message {i} after ALL validation!")
+                # Emergency fix
+                if msg.get('role') == 'assistant' and 'tool_calls' in msg:
+                    msg['content'] = ' '  # Space for assistant with tool_calls
+                else:
+                    msg['content'] = '.'  # Period for others
+                logger.info(f"🚨 EMERGENCY FIX: Set emergency content for message {i}")
+        
+        # Debug log specifically for message 5 if it exists
+        if len(validated_messages) > 5:
+            msg_5 = validated_messages[5]
+            logger.info(f"🔍 DEBUG MESSAGE 5: role='{msg_5.get('role', 'MISSING')}', content='{msg_5.get('content', 'MISSING')}', has_tool_calls={'tool_calls' in msg_5}")
         
         follow_up_response = self.client.chat.completions.create(
             **params,
