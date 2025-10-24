@@ -4,7 +4,9 @@ from copy import copy
 import json
 import logging
 import re
+import time
 from openai import OpenAI
+from openai import APIError, RateLimitError, APIConnectionError, APIStatusError
 import os
 from pydantic import BaseModel, Field
 from typing import List, Dict, Any, Optional, Callable
@@ -144,7 +146,8 @@ class LLM:
         params = self.get_embedding_params()
         logger.info(f"Embedding text with parameters: {params}")
         
-        response = self.client.embeddings.create(
+        response = self._api_call_with_retry(
+            self.client.embeddings.create,
             **params,
             input=text
         )
@@ -171,28 +174,8 @@ class LLM:
         # Validate and sanitize messages before sending to LLM
         validated_messages = self._validate_messages_for_api(self.messages)
         
-        # FINAL SAFETY CHECK before API call
-        logger.info(f"🚀 Making API call with {len(validated_messages)} messages...")
-        self._final_api_safety_check(validated_messages)
-        
-        # ABSOLUTE EMERGENCY CHECK - scan every message one last time
-        for i, msg in enumerate(validated_messages):
-            content = msg.get('content', '')
-            if content == '':
-                logger.error(f"🚨 CRITICAL: Found empty content at message {i} after ALL validation!")
-                # Emergency fix
-                if msg.get('role') == 'assistant' and 'tool_calls' in msg:
-                    msg['content'] = ' '  # Space for assistant with tool_calls
-                else:
-                    msg['content'] = '.'  # Period for others
-                logger.info(f"🚨 EMERGENCY FIX: Set emergency content for message {i}")
-        
-        # Debug log specifically for message 5 if it exists
-        if len(validated_messages) > 5:
-            msg_5 = validated_messages[5]
-            logger.info(f"🔍 DEBUG MESSAGE 5: role='{msg_5.get('role', 'MISSING')}', content='{msg_5.get('content', 'MISSING')}', has_tool_calls={'tool_calls' in msg_5}")
-        
-        response = self.client.chat.completions.create(
+        response = self._api_call_with_retry(
+            self.client.chat.completions.create,
             **params,
             messages=validated_messages
         )
@@ -224,6 +207,87 @@ class LLM:
         self.retry_count = 0
         if self.system:
             self.add_message("system", self.system)
+    
+    def _api_call_with_retry(self, api_func, *args, **kwargs):
+        """
+        Execute an API call with retry logic for transient errors.
+        
+        Retries on:
+        - 403 Forbidden errors (often transient rate limiting)
+        - 429 Rate limit errors
+        - 500+ Server errors
+        - Connection errors
+        
+        Args:
+            api_func: The API function to call
+            *args: Positional arguments to pass to the function
+            **kwargs: Keyword arguments to pass to the function
+            
+        Returns:
+            The API response
+            
+        Raises:
+            Exception: After max retries exceeded
+        """
+        max_retries = 3
+        base_delay = 5  # seconds
+        
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"API call attempt {attempt + 1}/{max_retries}")
+                response = api_func(*args, **kwargs)
+                
+                # Success - reset any retry tracking
+                if attempt > 0:
+                    logger.info(f"API call succeeded after {attempt + 1} attempts")
+                    
+                return response
+                
+            except APIStatusError as e:
+                # Check for retryable status codes
+                is_retryable = e.status_code in [403, 429, 500, 502, 503, 504]
+                
+                if is_retryable and attempt < max_retries - 1:
+                    delay = base_delay * (attempt + 1)  # Linear backoff: 5s, 10s, 15s
+                    logger.warning(
+                        f"API call failed with {e.status_code} error (attempt {attempt + 1}/{max_retries}). "
+                        f"Retrying in {delay} seconds... Error: {str(e)[:200]}"
+                    )
+                    time.sleep(delay)
+                    continue
+                else:
+                    # Not retryable or max retries exceeded
+                    logger.error(
+                        f"API call failed with {e.status_code} error after {attempt + 1} attempts. "
+                        f"Error: {str(e)[:500]}"
+                    )
+                    raise
+                    
+            except (RateLimitError, APIConnectionError) as e:
+                # These are always retryable
+                if attempt < max_retries - 1:
+                    delay = base_delay * (attempt + 1)
+                    logger.warning(
+                        f"API call failed with {type(e).__name__} (attempt {attempt + 1}/{max_retries}). "
+                        f"Retrying in {delay} seconds... Error: {str(e)[:200]}"
+                    )
+                    time.sleep(delay)
+                    continue
+                else:
+                    logger.error(
+                        f"API call failed with {type(e).__name__} after {attempt + 1} attempts. "
+                        f"Error: {str(e)[:500]}"
+                    )
+                    raise
+                    
+            except Exception as e:
+                # Unexpected error - don't retry
+                logger.error(f"API call failed with unexpected error: {type(e).__name__}: {str(e)[:500]}")
+                raise
+        
+        # Should never reach here, but just in case
+        raise Exception(f"API call failed after {max_retries} attempts")
+
     
     def add_tool(self, tool: ToolFunction):
         """
@@ -436,8 +500,8 @@ class LLM:
         if raw_content is not None and str(raw_content).strip():
             assistant_message["content"] = str(raw_content).strip()
         else:
-            # OpenAI API rejects truly empty content fields — use a single space as a minimal valid value
-            assistant_message["content"] = " "
+            # OpenAI API requires non-empty content
+            assistant_message["content"] = "[Tool calls in progress]"
 
         self.messages.append(assistant_message)
         
@@ -515,7 +579,8 @@ class LLM:
             msg_5 = validated_messages[5]
             logger.info(f"🔍 DEBUG MESSAGE 5: role='{msg_5.get('role', 'MISSING')}', content='{msg_5.get('content', 'MISSING')}', has_tool_calls={'tool_calls' in msg_5}")
         
-        follow_up_response = self.client.chat.completions.create(
+        follow_up_response = self._api_call_with_retry(
+            self.client.chat.completions.create,
             **params,
             messages=validated_messages
         )

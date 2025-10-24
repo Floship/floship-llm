@@ -662,8 +662,8 @@ class TestLLMTools:
                     tool_call_message = msg
                     break
             assert tool_call_message is not None
-            # The library may normalize empty assistant content to a single space for API compatibility
-            assert tool_call_message['content'] in ["", " "]
+            # The library may normalize empty assistant content to a placeholder for API compatibility
+            assert tool_call_message['content'] in ["", " ", "[Tool calls in progress]"]
             
             tool_messages = [msg for msg in llm.messages if msg.get('role') == 'tool']
             assert len(tool_messages) > 0
@@ -859,8 +859,8 @@ class TestLLMTools:
             assert len(validated) == 1
             assert validated[0]["role"] == "assistant"
             assert "tool_calls" in validated[0]
-            # Assistant with tool_calls can have empty content
-            assert validated[0]["content"] == ""
+            # Assistant with tool_calls now has a single space for API safety
+            assert validated[0]["content"] == " "
     
     def test_validate_messages_edge_logging(self):
         """Test edge case logging paths for full coverage.""" 
