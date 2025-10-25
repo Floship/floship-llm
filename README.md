@@ -8,7 +8,8 @@ A reusable Python library for interacting with Heroku Managed Inference and Agen
 - 🎯 **Heroku Inference API** - Optimized for Heroku's managed LLM service
 - 🔄 Support for continuous (multi-turn) conversations
 - 🛠️ **Tool/Function calling** - Let the LLM execute Python functions
-- 📊 Structured output with Pydantic schemas
+- 📊 **Tool call tracking** (v0.2.0+) - Monitor and budget tool usage with detailed metrics
+- 📈 Structured output with Pydantic schemas
 - 🎯 JSON response parsing and validation
 - ⚙️ Configurable parameters (temperature, top_k, top_p, etc.)
 - 🧠 **Extended thinking** support for Claude models (Heroku-specific)
@@ -254,6 +255,117 @@ llm.clear_tools()
 llm.enable_tool_support(True)  # or False
 ```
 
+### Tool Call Tracking (v0.2.0+)
+
+Track and monitor all tool invocations for resource budgeting, cost estimation, and debugging:
+
+```python
+from floship_llm import LLM
+
+llm = LLM(enable_tools=True)
+
+# Add some tools
+llm.add_tool_from_function(search_database)
+llm.add_tool_from_function(calculate_metrics)
+llm.add_tool_from_function(generate_report)
+
+# Make a prompt that uses tools
+response = llm.prompt("Analyze Q4 sales data and generate a summary report")
+
+# Access tracking data
+tool_count = llm.get_last_tool_call_count()
+history = llm.get_last_tool_history()
+depth = llm.get_last_recursion_depth()
+
+print(f"Used {tool_count} tool calls across {depth} recursion levels")
+
+# Examine detailed history
+for call in history:
+    print(f"{call['index']}. {call['tool']} - {call['execution_time_ms']}ms")
+    if 'error' in call:
+        print(f"   Error: {call['error']}")
+```
+
+#### Tracking Methods
+
+- `get_last_tool_call_count()` → `int`: Total number of tool calls in last prompt
+- `get_last_tool_history()` → `List[Dict]`: Detailed history of each tool call
+- `get_last_recursion_depth()` → `int`: Maximum recursion depth reached
+- `get_last_response_metadata()` → `Dict`: Complete metadata dictionary
+
+#### Tool History Entry Structure
+
+Each entry in the tool history contains:
+```python
+{
+    "index": 1,                      # Sequential call number
+    "tool": "search_database",       # Tool name
+    "arguments": {"query": "..."},   # Arguments passed
+    "recursion_depth": 0,            # Depth in call chain
+    "execution_time_ms": 245,        # Execution time
+    "result_length": 1024,           # Result size in chars
+    "timestamp": 1698234567.89,      # Unix timestamp
+    "tokens": 150,                   # Token count (if available)
+    "was_truncated": False,          # Whether result was truncated
+    "error": "..."                   # Error message (if failed)
+}
+```
+
+#### Resource Budgeting Example
+
+```python
+# Set tool usage budget
+TOOL_BUDGET = 50
+COST_PER_TOOL = 0.001  # $0.001 per tool call
+
+response = llm.prompt("Complex analysis task...")
+
+# Check budget
+tools_used = llm.get_last_tool_call_count()
+cost = tools_used * COST_PER_TOOL
+
+if tools_used > TOOL_BUDGET:
+    print(f"⚠️  Budget exceeded: {tools_used}/{TOOL_BUDGET} tools")
+print(f"Cost: ${cost:.4f}")
+```
+
+#### Rate Limiting Example
+
+```python
+import time
+
+MAX_TOOLS_PER_MINUTE = 100
+tools_this_minute = 0
+
+response = llm.prompt("Task...")
+tools_this_minute += llm.get_last_tool_call_count()
+
+if tools_this_minute >= MAX_TOOLS_PER_MINUTE:
+    print("Rate limit reached, waiting...")
+    time.sleep(60)
+    tools_this_minute = 0
+```
+
+#### Performance Analysis Example
+
+```python
+history = llm.get_last_tool_history()
+
+# Find slow tools
+slow_tools = [c for c in history if c['execution_time_ms'] > 1000]
+print(f"Slow tools: {len(slow_tools)}")
+
+# Analyze recursion patterns
+max_depth = llm.get_last_recursion_depth()
+if max_depth > 3:
+    print(f"⚠️  Deep recursion: {max_depth} levels")
+
+# Group by recursion depth
+for depth in range(max_depth + 1):
+    at_depth = [c for c in history if c['recursion_depth'] == depth]
+    print(f"Depth {depth}: {len(at_depth)} tools")
+```
+
 ### Configuration
 
 The library reads configuration from environment variables:
@@ -451,6 +563,12 @@ Use `temperature`, `top_p`, and `top_k` to control generation behavior instead.
 - `enable_tool_support(enabled=True)`: Enable/disable tool support
 - `execute_tool(tool_call)`: Execute a tool call and return result
 
+*Tool Call Tracking (v0.2.0+):*
+- `get_last_tool_call_count()`: Get total number of tool calls from last prompt
+- `get_last_tool_history()`: Get detailed history of all tool calls with metadata
+- `get_last_recursion_depth()`: Get maximum recursion depth reached
+- `get_last_response_metadata()`: Get complete metadata dictionary
+
 **Properties:**
 - `supports_parallel_requests`: Check if model supports parallel requests
 - `supports_frequency_penalty`: Check if model supports frequency penalty
@@ -473,12 +591,13 @@ pytest tests/test_tools.py -v  # Tool functionality tests
 pytest tests/test_client.py -v  # Core client tests
 ```
 
-**Test Coverage:** 166 tests covering all functionality including:
+**Test Coverage:** 260 tests covering all functionality including:
 - Core LLM client operations
 - Tool/function calling workflows
+- Tool call tracking and metadata
 - Schema validation and JSON processing
 - Error handling and edge cases
-- 95% overall code coverage
+- 93% overall code coverage
 
 ### Code Formatting
 
