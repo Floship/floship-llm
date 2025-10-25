@@ -51,12 +51,22 @@ coverage.xml
 
 # Environments
 .env
+.env.*
 .venv
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Credentials and secrets (never commit!)
+*_credentials.py
+*_secrets.py
+*_keys.py
+credentials.json
+secrets.json
+*.key
+*.pem
 
 # IDEs
 .vscode/
