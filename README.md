@@ -1,17 +1,19 @@
 # Floship LLM Client Library
 
-A reusable Python library for interacting with OpenAI-compatible inference endpoints.
+A reusable Python library for interacting with Heroku Managed Inference and Agents API and other OpenAI-compatible inference endpoints.
 
 ## Features
 
 - 🚀 Simple and intuitive API for LLM interactions
+- 🎯 **Heroku Inference API** - Optimized for Heroku's managed LLM service
 - 🔄 Support for continuous (multi-turn) conversations
-- �️ **Tool/Function calling** - Let the LLM execute Python functions
-- �📊 Structured output with Pydantic schemas
+- 🛠️ **Tool/Function calling** - Let the LLM execute Python functions
+- 📊 Structured output with Pydantic schemas
 - 🎯 JSON response parsing and validation
-- ⚙️ Configurable parameters (temperature, penalties, etc.)
+- ⚙️ Configurable parameters (temperature, top_k, top_p, etc.)
+- 🧠 **Extended thinking** support for Claude models (Heroku-specific)
 - 🔁 Retry mechanism with configurable limits
-- 🔌 Compatible with any OpenAI-compatible API
+- 🔌 Compatible with Heroku Inference API and OpenAI-compatible APIs
 
 ## Installation
 
@@ -53,29 +55,97 @@ Or using pip:
 pip install -e ".[dev]"
 ```
 
-## Quick Start
+## Quick Start with Heroku Inference API
+
+### Setup Environment
+
+First, set up your Heroku Inference API credentials:
+
+```bash
+# Get your credentials from Heroku
+export INFERENCE_URL="https://us.inference.heroku.com"
+export INFERENCE_MODEL_ID="claude-4-sonnet"
+export INFERENCE_KEY="your-heroku-api-key"
+```
+
+Or use Heroku CLI to set them automatically:
+
+```bash
+eval $(heroku config -a $APP_NAME --shell | grep '^INFERENCE_' | sed 's/^/export /' | tee >(cat >&2))
+```
 
 ### Basic Usage
 
 ```python
 from floship_llm import LLM
 
-# Set environment variables
-# INFERENCE_URL - Your LLM API endpoint
-# INFERENCE_MODEL_ID - Model identifier
-# INFERENCE_KEY - API key
-
-# Create a client
+# Create a client (reads environment variables automatically)
 llm = LLM(
     type='completion',
-    temperature=0.7,
-    continuous=False  # Single-turn conversation
+    temperature=0.15,  # Lower for more focused responses
+    continuous=False   # Single-turn conversation
 )
 
 # Generate a response
 response = llm.prompt("What is the capital of France?")
 print(response)
 ```
+
+### Using Extended Thinking (Claude Models)
+
+Extended thinking allows Claude models to spend more time reasoning before responding. This is particularly useful for complex problems:
+
+```python
+from floship_llm import LLM
+
+# Enable extended thinking for Claude models
+llm = LLM(
+    type='completion',
+    temperature=0.15,
+    extended_thinking={
+        "enabled": True,
+        "budget_tokens": 1024,        # Tokens allocated for thinking
+        "include_reasoning": True      # Include thinking process in response
+    }
+)
+
+# Ask a complex question
+response = llm.prompt(
+    "Solve this logic puzzle: If all bloops are razzles and all razzles are lazzles, "
+    "are all bloops definitely lazzles?"
+)
+print(response)
+# Response will include the reasoning process if include_reasoning=True
+```
+
+Supported Claude models for extended thinking:
+- claude-4.5-sonnet
+- claude-4.5-haiku
+- claude-4-sonnet
+- claude-3.7-sonnet
+
+### Advanced Parameters (Heroku-Specific)
+
+```python
+from floship_llm import LLM
+
+# Fine-tune generation behavior
+llm = LLM(
+    type='completion',
+    temperature=0.7,              # Creativity (0.0-1.0)
+    max_completion_tokens=2000,   # Max tokens to generate
+    top_p=0.9,                    # Nucleus sampling threshold
+    top_k=50,                     # Top-k sampling (limits vocabulary)
+    continuous=True
+)
+
+response = llm.prompt("Write a creative story about AI")
+```
+
+**Note on Deprecated Parameters:**
+- `frequency_penalty` and `presence_penalty` are **not supported** by Heroku Inference API
+- These parameters are ignored if sent (won't cause errors)
+- Use `temperature`, `top_p`, and `top_k` instead to control generation behavior
 
 ### Continuous Conversations
 
@@ -184,22 +254,61 @@ llm.clear_tools()
 llm.enable_tool_support(True)  # or False
 ```
 
-## Configuration
+### Configuration
 
-The library requires the following environment variables:
+The library reads configuration from environment variables:
 
-- `INFERENCE_URL`: The base URL of your LLM API endpoint
-- `INFERENCE_MODEL_ID`: The model identifier to use
-- `INFERENCE_KEY`: Your API authentication key
-- `INFERENCE_SUPPORTS_PARALLEL_REQUESTS` (optional): Set to "False" if the API doesn't support parallel requests (default: "True")
+- `INFERENCE_URL` (required): Your Heroku Inference API endpoint
+  - Default: `https://us.inference.heroku.com`
+- `INFERENCE_MODEL_ID` (required): The LLM model to use
+  - Example: `claude-4-sonnet`, `gpt-4`, `meta-llama-4-405b-instruct`
+- `INFERENCE_KEY` (required): Your API authentication key
 
-Example:
-
+**Heroku Setup:**
 ```bash
-export INFERENCE_URL="https://api.openai.com/v1"
-export INFERENCE_MODEL_ID="gpt-4"
-export INFERENCE_KEY="sk-..."
+export INFERENCE_URL="https://us.inference.heroku.com"
+export INFERENCE_MODEL_ID="claude-4-sonnet"
+export INFERENCE_KEY="your-heroku-api-key"
 ```
+
+**Alternative Endpoint (OpenAI-compatible):**
+```bash
+export INFERENCE_URL="https://api.openai.com/v1/chat/completions"
+export INFERENCE_MODEL_ID="gpt-4"
+export INFERENCE_KEY="your-openai-api-key"
+```
+
+### LLM Class Parameters
+
+```python
+LLM(
+    type: str = "completion",
+    temperature: float = 0.15,
+    max_completion_tokens: Optional[int] = None,  # Heroku: max tokens to generate
+    top_p: Optional[float] = None,                # Nucleus sampling (0.0-1.0)
+    top_k: Optional[int] = None,                  # Top-k sampling
+    extended_thinking: Optional[dict] = None,     # Claude extended thinking config
+    continuous: bool = False,
+    retry_limit: int = 5,
+    allow_ignored_params: bool = False,  # Allow deprecated parameters
+    **kwargs
+)
+```
+
+**Key Parameters:**
+- `temperature`: Controls randomness (0.0 = deterministic, 1.0 = creative). Default: 0.15
+- `max_completion_tokens`: Maximum tokens to generate (Heroku-specific, replaces `max_tokens`)
+- `top_p`: Nucleus sampling threshold (0.0-1.0)
+- `top_k`: Limits vocabulary to top K tokens
+- `extended_thinking`: Dict with `enabled`, `budget_tokens`, `include_reasoning` (Claude only)
+- `continuous`: Enable multi-turn conversations with history
+- `allow_ignored_params`: If True, allows deprecated parameters without warnings
+
+**⚠️ Deprecated Parameters (Not Supported by Heroku):**
+- `frequency_penalty`: Use `temperature` and `top_p` instead
+- `presence_penalty`: Use `temperature` and `top_k` instead
+
+These parameters are silently ignored by Heroku Inference API.
 
 ## Advanced Features
 
@@ -290,19 +399,40 @@ json_str = lm_json_utils.extract_strict_json(text)
 ### LLM Class
 
 **Constructor Parameters:**
+
+*Heroku-Specific Parameters:*
 - `type` (str): 'completion' or 'embedding' (default: 'completion')
 - `model` (str): Model identifier (defaults to INFERENCE_MODEL_ID env var)
-- `temperature` (float): Sampling temperature (default: 0.15)
-- `frequency_penalty` (float): Frequency penalty (default: 0.2)
-- `presence_penalty` (float): Presence penalty (default: 0.2)
+- `temperature` (float): Sampling temperature, 0.0-1.0 (default: 0.15)
+- `max_completion_tokens` (int): Maximum tokens to generate (Heroku-specific)
+- `top_p` (float): Nucleus sampling threshold, 0.0-1.0
+- `top_k` (int): Top-k sampling, limits vocabulary
+- `extended_thinking` (dict): Extended thinking config for Claude models
+  ```python
+  {
+      "enabled": True,
+      "budget_tokens": 1024,
+      "include_reasoning": True
+  }
+  ```
+- `allow_ignored_params` (bool): Allow deprecated parameters (default: False)
+
+*General Parameters:*
 - `response_format` (BaseModel): Pydantic model for structured output
 - `continuous` (bool): Enable conversation history (default: True)
 - `messages` (list): Initial conversation history
 - `max_length` (int): Maximum response length (default: 100,000)
 - `input_tokens_limit` (int): Input token limit (default: 40,000)
-- `max_retry` (int): Maximum retry attempts (default: 3)
+- `retry_limit` (int): Maximum retry attempts (default: 5)
 - `enable_tools` (bool): Enable tool/function calling (default: False)
 - `system` (str): System prompt
+
+*⚠️ Deprecated Parameters (Not Supported by Heroku):*
+- ~~`frequency_penalty`~~: Not supported by Heroku Inference API
+- ~~`presence_penalty`~~: Not supported by Heroku Inference API
+- ~~`max_retry`~~: Renamed to `retry_limit`
+
+Use `temperature`, `top_p`, and `top_k` to control generation behavior instead.
 
 **Methods:**
 

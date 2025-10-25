@@ -35,14 +35,18 @@ class LLM:
     
     def __init__(self, *args, **kwargs):
         """
-        Initialize LLM client.
+        Initialize LLM client for Heroku Inference API.
         
         Args:
             type: 'completion' or 'embedding' (default: 'completion')
             model: Model ID (defaults to INFERENCE_MODEL_ID env var)
-            temperature: Sampling temperature (default: 0.15)
-            frequency_penalty: Frequency penalty (default: 0.2)
-            presence_penalty: Presence penalty (default: 0.2)
+            temperature: Sampling temperature, 0.0-1.0 (default: 0.15)
+            max_completion_tokens: Maximum tokens to generate (default: None)
+            top_k: Sample from top K options (default: None)
+            top_p: Nucleus sampling threshold, 0.0-1.0 (default: None)
+            extended_thinking: Enable extended thinking for Claude models (default: None)
+                Example: {"enabled": True, "budget_tokens": 1024, "include_reasoning": True}
+            allow_ignored_params: Allow unsupported parameters without error (default: False)
             response_format: Pydantic model for structured output
             continuous: Keep conversation history (default: True)
             messages: Initial conversation history
@@ -56,8 +60,17 @@ class LLM:
             max_tool_response_tokens: Max tokens in tool responses (default: 4000)
             track_tool_metadata: Track tool execution metadata (default: False)
             
+        Note:
+            frequency_penalty and presence_penalty are NOT supported by Heroku Inference API
+            and will be ignored. Use allow_ignored_params=True to include them without error.
+            
         Raises:
             ValueError: If required environment variables are missing
+            
+        Environment Variables Required:
+            INFERENCE_URL: Heroku Inference API endpoint (e.g., https://us.inference.heroku.com)
+            INFERENCE_MODEL_ID: Model identifier (e.g., claude-4-sonnet)
+            INFERENCE_KEY: API key for authentication
         """
         # Validate required environment variables
         self._validate_environment()
@@ -80,8 +93,18 @@ class LLM:
         # Model configuration
         self.model = kwargs.get('model', os.environ['INFERENCE_MODEL_ID'])
         self.temperature = kwargs.get('temperature', 0.15)
-        self.frequency_penalty = kwargs.get('frequency_penalty', 0.2)
-        self.presence_penalty = kwargs.get('presence_penalty', 0.2)
+        
+        # Heroku-specific parameters
+        self.max_completion_tokens = kwargs.get('max_completion_tokens', None)
+        self.top_k = kwargs.get('top_k', None)
+        self.top_p = kwargs.get('top_p', None)
+        self.extended_thinking = kwargs.get('extended_thinking', None)
+        self.allow_ignored_params = kwargs.get('allow_ignored_params', False)
+        
+        # Deprecated parameters (Heroku ignores these but won't error)
+        # Kept for backward compatibility but not recommended
+        self.frequency_penalty = kwargs.get('frequency_penalty', None)
+        self.presence_penalty = kwargs.get('presence_penalty', None)
         
         # Response format (structured output)
         self.response_format = kwargs.get('response_format', None)
@@ -134,13 +157,25 @@ class LLM:
     
     @property
     def supports_frequency_penalty(self) -> bool:
-        """Check if model supports frequency penalty."""
-        return 'claude' not in self.model.lower() and 'gemini' not in self.model.lower()
+        """
+        Check if model supports frequency penalty.
+        
+        Note: Heroku Inference API ignores frequency_penalty but won't return an error.
+        This parameter is deprecated for Heroku.
+        """
+        logger.warning("frequency_penalty is not supported by Heroku Inference API and will be ignored")
+        return False
     
     @property
     def supports_presence_penalty(self) -> bool:
-        """Check if model supports presence penalty."""
-        return 'claude' not in self.model.lower() and 'gemini' not in self.model.lower()
+        """
+        Check if model supports presence penalty.
+        
+        Note: Heroku Inference API ignores presence_penalty but won't return an error.
+        This parameter is deprecated for Heroku.
+        """
+        logger.warning("presence_penalty is not supported by Heroku Inference API and will be ignored")
+        return False
     
     @property
     def require_response_format(self) -> bool:
@@ -190,16 +225,35 @@ class LLM:
     # ========== API Request Management ==========
     
     def get_request_params(self) -> Dict[str, Any]:
-        """Build parameters for completion request."""
+        """
+        Build parameters for completion request according to Heroku Inference API spec.
+        
+        See: https://devcenter.heroku.com/articles/heroku-inference-api-v1-chat-completions
+        """
         params = {
             "model": self.model,
             "temperature": self.temperature,
         }
         
-        if self.supports_frequency_penalty:
+        # Add Heroku-supported optional parameters
+        if self.max_completion_tokens is not None:
+            params['max_completion_tokens'] = self.max_completion_tokens
+        
+        if self.top_k is not None:
+            params['top_k'] = self.top_k
+        
+        if self.top_p is not None:
+            params['top_p'] = self.top_p
+        
+        if self.extended_thinking is not None:
+            params['extended_thinking'] = self.extended_thinking
+        
+        # Legacy parameters (not recommended, Heroku ignores these)
+        # Only include if allow_ignored_params is True (internal flag, not sent to API)
+        if self.frequency_penalty is not None and self.allow_ignored_params:
             params['frequency_penalty'] = self.frequency_penalty
         
-        if self.supports_presence_penalty:
+        if self.presence_penalty is not None and self.allow_ignored_params:
             params['presence_penalty'] = self.presence_penalty
         
         # Add tools if enabled

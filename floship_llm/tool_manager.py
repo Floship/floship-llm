@@ -258,16 +258,6 @@ class ToolManager:
         Get OpenAI tools schema for all registered tools.
         
         Returns:
-            List of tool schemas in OpenAI format
+            List of tool schemas in OpenAI format (JSON-serializable)
         """
-        return [
-            {
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.parameters
-                }
-            }
-            for tool in self.tools.values()
-        ]
+        return [tool.to_openai_format() for tool in self.tools.values()]

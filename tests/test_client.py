@@ -50,8 +50,14 @@ class TestLLM:
             assert llm.temperature == 0.15
             assert llm.max_retry == 3
             assert llm.retry_count == 0
-            assert llm.frequency_penalty == 0.2
-            assert llm.presence_penalty == 0.2
+            # Heroku-specific parameters (deprecated parameters are None by default)
+            assert llm.frequency_penalty is None
+            assert llm.presence_penalty is None
+            assert llm.max_completion_tokens is None
+            assert llm.top_k is None
+            assert llm.top_p is None
+            assert llm.extended_thinking is None
+            assert llm.allow_ignored_params is False
             assert llm.continuous is True
             assert llm.messages == []
             assert llm.max_length == 100_000
@@ -137,34 +143,32 @@ class TestLLM:
                 assert llm.supports_parallel_requests == 0
 
     def test_supports_frequency_penalty_property(self):
-        """Test supports_frequency_penalty property."""
+        """Test supports_frequency_penalty property - Heroku does not support this."""
         with patch('floship_llm.client.OpenAI'):
-            # Test with GPT model (should support)
             llm = LLM()
+            # Heroku Inference API does not support frequency_penalty
+            # Should return False for all models and log a warning
             llm.model = 'gpt-4'
-            assert llm.supports_frequency_penalty is True
+            assert llm.supports_frequency_penalty is False
             
-            # Test with Claude model (should not support)
             llm.model = 'claude-3'
             assert llm.supports_frequency_penalty is False
             
-            # Test with Gemini model (should not support)
             llm.model = 'gemini-pro'
             assert llm.supports_frequency_penalty is False
 
     def test_supports_presence_penalty_property(self):
-        """Test supports_presence_penalty property."""
+        """Test supports_presence_penalty property - Heroku does not support this."""
         with patch('floship_llm.client.OpenAI'):
-            # Test with GPT model (should support)
             llm = LLM()
+            # Heroku Inference API does not support presence_penalty
+            # Should return False for all models and log a warning
             llm.model = 'gpt-4'
-            assert llm.supports_presence_penalty is True
+            assert llm.supports_presence_penalty is False
             
-            # Test with Claude model (should not support)
             llm.model = 'claude-3'
             assert llm.supports_presence_penalty is False
             
-            # Test with Gemini model (should not support)
             llm.model = 'gemini-pro'
             assert llm.supports_presence_penalty is False
 
@@ -232,11 +236,72 @@ class TestLLM:
             assert result == "Hello world"
 
     def test_get_request_params(self):
-        """Test request parameters generation."""
+        """Test request parameters generation - Heroku-specific."""
         with patch('floship_llm.client.OpenAI'):
             llm = LLM(temperature=0.7)
             params = llm.get_request_params()
             
+            # Heroku does not support frequency_penalty or presence_penalty
+            # Only model and temperature should be included by default
+            expected = {
+                'model': 'test-model',
+                'temperature': 0.7
+            }
+            assert params == expected
+
+    def test_get_request_params_with_heroku_parameters(self):
+        """Test request parameters with Heroku-specific parameters."""
+        with patch('floship_llm.client.OpenAI'):
+            llm = LLM(
+                temperature=0.7,
+                max_completion_tokens=2000,
+                top_k=50,
+                top_p=0.9
+            )
+            params = llm.get_request_params()
+            
+            expected = {
+                'model': 'test-model',
+                'temperature': 0.7,
+                'max_completion_tokens': 2000,
+                'top_k': 50,
+                'top_p': 0.9
+            }
+            assert params == expected
+
+    def test_get_request_params_with_extended_thinking(self):
+        """Test request parameters with extended thinking for Claude."""
+        with patch('floship_llm.client.OpenAI'):
+            extended_thinking_config = {
+                "enabled": True,
+                "budget_tokens": 1024,
+                "include_reasoning": True
+            }
+            llm = LLM(
+                temperature=0.7,
+                extended_thinking=extended_thinking_config
+            )
+            params = llm.get_request_params()
+            
+            expected = {
+                'model': 'test-model',
+                'temperature': 0.7,
+                'extended_thinking': extended_thinking_config
+            }
+            assert params == expected
+
+    def test_get_request_params_with_allow_ignored_params(self):
+        """Test request parameters with deprecated params when allow_ignored_params=True."""
+        with patch('floship_llm.client.OpenAI'):
+            llm = LLM(
+                temperature=0.7,
+                frequency_penalty=0.2,
+                presence_penalty=0.2,
+                allow_ignored_params=True
+            )
+            params = llm.get_request_params()
+            
+            # When allow_ignored_params=True, deprecated params are included
             expected = {
                 'model': 'test-model',
                 'temperature': 0.7,
@@ -589,20 +654,22 @@ class TestLLM:
                 assert result.name == "test"
                 assert result.value == 42
 
-    @pytest.mark.parametrize("model_name,expected", [
-        ("gpt-4", True),
-        ("gpt-3.5-turbo", True),
-        ("claude-3", False),
-        ("Claude-2", False),
-        ("gemini-pro", False),
-        ("Gemini-1.5", False),
-        ("llama", True),
+    @pytest.mark.parametrize("model_name", [
+        "gpt-4",
+        "gpt-3.5-turbo",
+        "claude-3",
+        "Claude-2",
+        "gemini-pro",
+        "Gemini-1.5",
+        "llama",
     ])
-    def test_model_support_properties(self, model_name, expected):
-        """Test model support properties for different models."""
+    def test_model_support_properties(self, model_name):
+        """Test model support properties - Heroku doesn't support penalties for any model."""
         with patch('floship_llm.client.OpenAI'):
             llm = LLM()
             llm.model = model_name
             
-            assert llm.supports_frequency_penalty == expected
-            assert llm.supports_presence_penalty == expected
+            # Heroku Inference API does not support frequency_penalty or presence_penalty
+            # for any model, so these should always return False
+            assert llm.supports_frequency_penalty is False
+            assert llm.supports_presence_penalty is False
