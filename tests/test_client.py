@@ -708,3 +708,116 @@ class TestLLM:
             # for any model, so these should always return False
             assert llm.supports_frequency_penalty is False
             assert llm.supports_presence_penalty is False
+
+    # ========== Streaming Tests ==========
+
+    def test_streaming_basic(self):
+        """Test basic streaming functionality."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            # Mock streaming response
+            mock_chunk1 = Mock()
+            mock_chunk1.choices = [Mock(delta=Mock(content="Hello "))]
+            mock_chunk2 = Mock()
+            mock_chunk2.choices = [Mock(delta=Mock(content="world"))]
+            mock_chunk3 = Mock()
+            mock_chunk3.choices = [Mock(delta=Mock(content="!"))]
+
+            mock_stream = [mock_chunk1, mock_chunk2, mock_chunk3]
+            mock_client = mock_openai.return_value
+            mock_client.chat.completions.create.return_value = iter(mock_stream)
+
+            llm = LLM(stream=True, enable_tools=False)
+            chunks = list(llm.prompt_stream("Test prompt"))
+
+            assert chunks == ["Hello ", "world", "!"]
+            assert "".join(chunks) == "Hello world!"
+
+    def test_streaming_with_tools_raises_error(self):
+        """Test that streaming raises error when tools are enabled."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(stream=True, enable_tools=True)
+
+            # Add a mock tool
+            llm.tool_manager.tools = [{"name": "test_tool"}]
+
+            with pytest.raises(
+                ValueError, match="Streaming mode does not support tool calls"
+            ):
+                list(llm.prompt_stream("Test prompt"))
+
+    def test_streaming_adds_to_conversation_history(self):
+        """Test that streaming responses are added to conversation history."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            # Mock streaming response
+            mock_chunk1 = Mock()
+            mock_chunk1.choices = [Mock(delta=Mock(content="Answer "))]
+            mock_chunk2 = Mock()
+            mock_chunk2.choices = [Mock(delta=Mock(content="here"))]
+
+            mock_stream = [mock_chunk1, mock_chunk2]
+            mock_client = mock_openai.return_value
+            mock_client.chat.completions.create.return_value = iter(mock_stream)
+
+            llm = LLM(stream=True, enable_tools=False, continuous=True)
+            list(llm.prompt_stream("Question"))
+
+            # Check conversation history
+            assert len(llm.messages) == 2
+            assert llm.messages[0]["role"] == "user"
+            assert llm.messages[0]["content"] == "Question"
+            assert llm.messages[1]["role"] == "assistant"
+            assert llm.messages[1]["content"] == "Answer here"
+
+    def test_streaming_empty_chunks(self):
+        """Test streaming handles empty/None content gracefully."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            # Mock streaming response with some empty chunks
+            mock_chunk1 = Mock()
+            mock_chunk1.choices = [Mock(delta=Mock(content="Hello"))]
+            mock_chunk2 = Mock()
+            mock_chunk2.choices = [Mock(delta=Mock(content=None))]
+            mock_chunk3 = Mock()
+            mock_chunk3.choices = [Mock(delta=Mock(content=" world"))]
+
+            mock_stream = [mock_chunk1, mock_chunk2, mock_chunk3]
+            mock_client = mock_openai.return_value
+            mock_client.chat.completions.create.return_value = iter(mock_stream)
+
+            llm = LLM(stream=True, enable_tools=False)
+            chunks = list(llm.prompt_stream("Test"))
+
+            # Should only include non-None content
+            assert chunks == ["Hello", " world"]
+
+    def test_streaming_with_system_message(self):
+        """Test streaming with system message."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            mock_chunk = Mock()
+            mock_chunk.choices = [Mock(delta=Mock(content="Response"))]
+
+            mock_stream = [mock_chunk]
+            mock_client = mock_openai.return_value
+            mock_client.chat.completions.create.return_value = iter(mock_stream)
+
+            llm = LLM(stream=True, enable_tools=False)
+            list(llm.prompt_stream("Test", system="You are a helpful assistant"))
+
+            # Check that system message was added
+            assert llm.messages[0]["role"] == "system"
+            assert llm.messages[0]["content"] == "You are a helpful assistant"
+
+    def test_streaming_continuous_false_resets(self):
+        """Test that streaming resets conversation when continuous=False."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            mock_chunk = Mock()
+            mock_chunk.choices = [Mock(delta=Mock(content="Response"))]
+
+            mock_stream = [mock_chunk]
+            mock_client = mock_openai.return_value
+            mock_client.chat.completions.create.return_value = iter(mock_stream)
+
+            llm = LLM(stream=True, enable_tools=False, continuous=False)
+            list(llm.prompt_stream("Test"))
+
+            # Should reset after streaming
+            assert len(llm.messages) == 0

@@ -59,6 +59,7 @@ class LLM:
             sanitization_patterns: Custom sanitization patterns
             max_tool_response_tokens: Max tokens in tool responses (default: 4000)
             track_tool_metadata: Track tool execution metadata (default: False)
+            stream: Enable streaming responses (default: False)
 
         Note:
             frequency_penalty and presence_penalty are NOT supported by Heroku Inference API
@@ -132,6 +133,9 @@ class LLM:
             max_tokens=kwargs.get("max_tool_response_tokens", 4000),
             track_metadata=kwargs.get("track_tool_metadata", False),
         )
+
+        # Streaming configuration
+        self.stream = kwargs.get("stream", False)
 
         # Tool configuration
         self.enable_tools = kwargs.get("enable_tools", False)
@@ -394,6 +398,79 @@ class LLM:
             self.reset()
 
         return result
+
+    def prompt_stream(self, prompt: str, system: Optional[str] = None):
+        """
+        Generate streaming completion from prompt.
+
+        NOTE: Streaming mode does NOT support tool calls. If tools are enabled,
+        this method will raise an error.
+
+        Args:
+            prompt: User prompt text
+            system: Optional system message (overrides instance system)
+
+        Yields:
+            Response chunks as they arrive from the API
+
+        Raises:
+            ValueError: If tools are enabled (tools not compatible with streaming)
+
+        Example:
+            >>> client = LLM(stream=True)
+            >>> for chunk in client.prompt_stream("Hello!"):
+            ...     print(chunk, end="", flush=True)
+        """
+        # Check if tools are enabled
+        if self.enable_tools and self.tool_manager.tools:
+            raise ValueError(
+                "Streaming mode does not support tool calls. "
+                "Disable tools or use non-streaming prompt() method."
+            )
+
+        # Reset tool tracking
+        self._current_tool_call_count = 0
+        self._current_tool_metadata = []
+
+        # Add messages
+        if system:
+            self.add_message("system", system)
+        self.add_message("user", prompt)
+
+        # Get request params and validate messages
+        params = self.get_request_params()
+        validated_messages = self._validate_messages_for_api(self.messages)
+
+        # Enable streaming
+        params["stream"] = True
+
+        try:
+            # Make streaming request (no retry for streaming)
+            stream = self.client.chat.completions.create(
+                **params, messages=validated_messages
+            )
+
+            full_response = ""
+
+            # Yield chunks as they arrive
+            for chunk in stream:
+                if chunk.choices and len(chunk.choices) > 0:
+                    delta = chunk.choices[0].delta
+                    if delta.content:
+                        content = delta.content
+                        full_response += content
+                        yield content
+
+            # Add complete response to conversation history
+            if full_response:
+                self.add_message("assistant", full_response)
+
+        except Exception as e:
+            logger.error(f"Streaming error: {str(e)}")
+            raise
+
+        if not self.continuous:
+            self.reset()
 
     def retry_prompt(self, prompt: Optional[str] = None) -> Optional[str]:
         """

@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2025-10-25
+
+### Added
+- **Streaming Support:** Real-time response streaming for better UX
+  - New `prompt_stream()` method for streaming completions
+  - Yields response chunks as they arrive from the API
+  - Maintains conversation history with streamed content
+  - Respects `continuous` setting (resets when False)
+  - Works with system messages and temperature settings
+  - Comprehensive test coverage for streaming functionality
+- New `stream` initialization parameter (default: False)
+- Documentation in README with streaming examples
+- New `examples_streaming.py` with 5 streaming examples
+
+### Changed
+- **Breaking:** Streaming mode does NOT support tool calls
+  - `prompt_stream()` raises `ValueError` if tools are enabled
+  - This is a technical limitation of the OpenAI API
+  - Use regular `prompt()` method when tools are needed
+
+### Notes
+- Streaming responses do not support retry mechanism
+- Tool tracking is reset but not used in streaming mode
+- Backward compatible: existing code continues to work unchanged
+
 ## [0.2.0] - 2025-10-25
 
 ### Added

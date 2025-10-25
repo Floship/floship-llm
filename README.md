@@ -92,6 +92,33 @@ response = llm.prompt("What is the capital of France?")
 print(response)
 ```
 
+### Streaming Responses
+
+Stream responses in real-time as they are generated:
+
+```python
+from floship_llm import LLM
+
+# Create a client with streaming enabled
+llm = LLM(
+    type='completion',
+    stream=True,
+    enable_tools=False  # Tools are not supported in streaming mode
+)
+
+# Stream response chunks
+print("Response: ", end="", flush=True)
+for chunk in llm.prompt_stream("Write a short poem about the ocean"):
+    print(chunk, end="", flush=True)
+print()  # New line after streaming completes
+```
+
+**Important Notes:**
+- Streaming mode does **not support tool/function calling**
+- If tools are enabled, `prompt_stream()` will raise a `ValueError`
+- Use the regular `prompt()` method if you need tool support
+- Streaming responses are added to conversation history automatically
+
 ### Using Extended Thinking (Claude Models)
 
 Extended thinking allows Claude models to spend more time reasoning before responding. This is particularly useful for complex problems:
