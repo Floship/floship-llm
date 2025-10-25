@@ -85,7 +85,7 @@ Comprehensive demonstration covering all retry scenarios.
 ### Example 1: 403 Error with Retry
 ```
 Attempt 1: 403 Forbidden → Wait 5s → Retry
-Attempt 2: 403 Forbidden → Wait 10s → Retry  
+Attempt 2: 403 Forbidden → Wait 10s → Retry
 Attempt 3: Success! ✅
 ```
 
@@ -130,7 +130,7 @@ Currently hardcoded but can be made configurable:
 ## Benefits
 
 1. **Resilience** - Handles transient network and API issues gracefully
-2. **User Experience** - Automatic recovery without manual intervention  
+2. **User Experience** - Automatic recovery without manual intervention
 3. **Production Ready** - Proper error handling and logging
 4. **Well Tested** - Comprehensive test coverage for all scenarios
 5. **Configurable** - Easy to adjust retry behavior if needed

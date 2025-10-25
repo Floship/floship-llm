@@ -10,8 +10,8 @@ This document lists the important constraints discovered when using the Heroku I
 
 **Error Message:**
 ```
-Error code: 400 - ValidationException: The model returned the following errors: 
-`temperature` and `top_p` cannot both be specified for this model. 
+Error code: 400 - ValidationException: The model returned the following errors:
+`temperature` and `top_p` cannot both be specified for this model.
 Please use only one.
 ```
 
@@ -34,8 +34,8 @@ llm = LLM(model="claude-4-5-sonnet", top_p=0.9)
 
 **Error Message:**
 ```
-Error code: 400 - ValidationException: The model returned the following errors: 
-`temperature` may only be set to 1 when thinking is enabled. 
+Error code: 400 - ValidationException: The model returned the following errors:
+`temperature` may only be set to 1 when thinking is enabled.
 Please consult our documentation at https://docs.claude.com/en/docs/build-with-claude/extended-thinking
 ```
 
@@ -60,7 +60,7 @@ llm = LLM(
 
 **Error Message:**
 ```
-Error code: 400 - ValidationException: The model returned the following errors: 
+Error code: 400 - ValidationException: The model returned the following errors:
 thinking.enabled.budget_tokens: Input should be greater than or equal to 1024
 ```
 

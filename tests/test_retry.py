@@ -2,9 +2,10 @@
 
 import os
 import time
-from unittest.mock import Mock, patch, MagicMock
+from unittest.mock import MagicMock, Mock, patch
+
 import pytest
-from openai import APIStatusError, RateLimitError, APIConnectionError
+from openai import APIConnectionError, APIStatusError, RateLimitError
 
 from floship_llm import LLM
 
@@ -14,9 +15,9 @@ class TestAPIRetry:
 
     def setup_method(self):
         """Set up test environment."""
-        os.environ['INFERENCE_URL'] = 'http://test.com'
-        os.environ['INFERENCE_MODEL_ID'] = 'test-model'
-        os.environ['INFERENCE_KEY'] = 'test-key'
+        os.environ["INFERENCE_URL"] = "http://test.com"
+        os.environ["INFERENCE_MODEL_ID"] = "test-model"
+        os.environ["INFERENCE_KEY"] = "test-key"
 
     def teardown_method(self):
         """Clean up test environment."""
@@ -24,7 +25,7 @@ class TestAPIRetry:
 
     def test_api_call_with_retry_success_on_first_attempt(self):
         """Test that successful calls don't retry."""
-        with patch('floship_llm.client.OpenAI') as mock_openai:
+        with patch("floship_llm.client.OpenAI") as mock_openai:
             llm = LLM()
 
             mock_response = Mock()
@@ -42,7 +43,7 @@ class TestAPIRetry:
 
     def test_api_call_with_retry_403_error(self):
         """Test that 403 Forbidden error is NOT retried (CloudFront WAF compatibility)."""
-        with patch('floship_llm.client.OpenAI') as mock_openai:
+        with patch("floship_llm.client.OpenAI") as mock_openai:
             llm = LLM()
 
             call_count = 0
@@ -53,7 +54,7 @@ class TestAPIRetry:
                 raise APIStatusError(
                     message="Request blocked",
                     response=Mock(status_code=403),
-                    body={"error": "Request blocked"}
+                    body={"error": "Request blocked"},
                 )
 
             mock_openai.return_value.chat.completions.create = mock_create
@@ -66,7 +67,7 @@ class TestAPIRetry:
 
     def test_api_call_with_retry_429_error(self):
         """Test retry on 429 Rate Limit error."""
-        with patch('floship_llm.client.OpenAI') as mock_openai:
+        with patch("floship_llm.client.OpenAI") as mock_openai:
             llm = LLM()
 
             mock_response = Mock()
@@ -83,13 +84,13 @@ class TestAPIRetry:
                     raise RateLimitError(
                         message="Rate limit exceeded",
                         response=Mock(status_code=429),
-                        body={"error": "Rate limit exceeded"}
+                        body={"error": "Rate limit exceeded"},
                     )
                 return mock_response
 
             mock_openai.return_value.chat.completions.create = mock_create
 
-            with patch('time.sleep'):  # Speed up test
+            with patch("time.sleep"):  # Speed up test
                 result = llm.prompt("Test prompt")
 
             assert call_count == 2
@@ -97,7 +98,7 @@ class TestAPIRetry:
 
     def test_api_call_with_retry_500_error(self):
         """Test retry on 500 Server Error."""
-        with patch('floship_llm.client.OpenAI') as mock_openai:
+        with patch("floship_llm.client.OpenAI") as mock_openai:
             llm = LLM()
 
             mock_response = Mock()
@@ -114,13 +115,13 @@ class TestAPIRetry:
                     raise APIStatusError(
                         message="Internal server error",
                         response=Mock(status_code=500),
-                        body={"error": "Internal server error"}
+                        body={"error": "Internal server error"},
                     )
                 return mock_response
 
             mock_openai.return_value.chat.completions.create = mock_create
 
-            with patch('time.sleep'):  # Speed up test
+            with patch("time.sleep"):  # Speed up test
                 result = llm.prompt("Test prompt")
 
             assert call_count == 2
@@ -128,7 +129,7 @@ class TestAPIRetry:
 
     def test_api_call_with_retry_connection_error(self):
         """Test retry on connection errors."""
-        with patch('floship_llm.client.OpenAI') as mock_openai:
+        with patch("floship_llm.client.OpenAI") as mock_openai:
             llm = LLM()
 
             mock_response = Mock()
@@ -143,14 +144,13 @@ class TestAPIRetry:
                 call_count += 1
                 if call_count == 1:
                     raise APIConnectionError(
-                        message="Connection failed",
-                        request=Mock()
+                        message="Connection failed", request=Mock()
                     )
                 return mock_response
 
             mock_openai.return_value.chat.completions.create = mock_create
 
-            with patch('time.sleep'):  # Speed up test
+            with patch("time.sleep"):  # Speed up test
                 result = llm.prompt("Test prompt")
 
             assert call_count == 2
@@ -158,7 +158,7 @@ class TestAPIRetry:
 
     def test_api_call_with_retry_max_retries_exceeded(self):
         """Test that after max retries, error is raised."""
-        with patch('floship_llm.client.OpenAI') as mock_openai:
+        with patch("floship_llm.client.OpenAI") as mock_openai:
             llm = LLM()
 
             call_count = 0
@@ -169,12 +169,12 @@ class TestAPIRetry:
                 raise APIStatusError(
                     message="Server error",
                     response=Mock(status_code=500),
-                    body={"error": "Server error"}
+                    body={"error": "Server error"},
                 )
 
             mock_openai.return_value.chat.completions.create = mock_create
 
-            with patch('time.sleep'):  # Speed up test
+            with patch("time.sleep"):  # Speed up test
                 with pytest.raises(APIStatusError):
                     llm.prompt("Test prompt")
 
@@ -183,7 +183,7 @@ class TestAPIRetry:
 
     def test_api_call_with_retry_non_retryable_error(self):
         """Test that non-retryable errors fail immediately."""
-        with patch('floship_llm.client.OpenAI') as mock_openai:
+        with patch("floship_llm.client.OpenAI") as mock_openai:
             llm = LLM()
 
             call_count = 0
@@ -194,7 +194,7 @@ class TestAPIRetry:
                 raise APIStatusError(
                     message="Bad request",
                     response=Mock(status_code=400),
-                    body={"error": "Bad request"}
+                    body={"error": "Bad request"},
                 )
 
             mock_openai.return_value.chat.completions.create = mock_create
@@ -207,7 +207,7 @@ class TestAPIRetry:
 
     def test_api_call_with_retry_sleep_timing(self):
         """Test that retry delays increase linearly."""
-        with patch('floship_llm.client.OpenAI') as mock_openai:
+        with patch("floship_llm.client.OpenAI") as mock_openai:
             llm = LLM()
 
             mock_response = Mock()
@@ -224,13 +224,13 @@ class TestAPIRetry:
                     raise APIStatusError(
                         message="Server error",
                         response=Mock(status_code=500),
-                        body={"error": "Server error"}
+                        body={"error": "Server error"},
                     )
                 return mock_response
 
             mock_openai.return_value.chat.completions.create = mock_create
 
-            with patch('time.sleep') as mock_sleep:
+            with patch("time.sleep") as mock_sleep:
                 result = llm.prompt("Test prompt")
 
             # Should have slept twice: 5s, then 10s
@@ -246,7 +246,7 @@ class TestAPIRetry:
         non_retryable_codes = [400, 401, 403, 404]
 
         for status_code in retryable_codes:
-            with patch('floship_llm.client.OpenAI') as mock_openai:
+            with patch("floship_llm.client.OpenAI") as mock_openai:
                 llm = LLM()
 
                 mock_response = Mock()
@@ -263,20 +263,20 @@ class TestAPIRetry:
                         raise APIStatusError(
                             message=f"Error {status_code}",
                             response=Mock(status_code=status_code),
-                            body={"error": f"Error {status_code}"}
+                            body={"error": f"Error {status_code}"},
                         )
                     return mock_response
 
                 mock_openai.return_value.chat.completions.create = mock_create
 
-                with patch('time.sleep'):
+                with patch("time.sleep"):
                     result = llm.prompt("Test prompt")
 
                 assert call_count == 2, f"Status code {status_code} should be retried"
                 assert result == "Success"
 
         for status_code in non_retryable_codes:
-            with patch('floship_llm.client.OpenAI') as mock_openai:
+            with patch("floship_llm.client.OpenAI") as mock_openai:
                 llm = LLM()
 
                 call_count = 0
@@ -287,7 +287,7 @@ class TestAPIRetry:
                     raise APIStatusError(
                         message=f"Error {status_code}",
                         response=Mock(status_code=status_code),
-                        body={"error": f"Error {status_code}"}
+                        body={"error": f"Error {status_code}"},
                     )
 
                 mock_openai.return_value.chat.completions.create = mock_create
@@ -295,11 +295,13 @@ class TestAPIRetry:
                 with pytest.raises(APIStatusError):
                     llm.prompt("Test prompt")
 
-                assert call_count == 1, f"Status code {status_code} should not be retried"
+                assert (
+                    call_count == 1
+                ), f"Status code {status_code} should not be retried"
 
     def test_embed_with_retry(self):
         """Test that embed method also uses retry logic."""
-        with patch('floship_llm.client.OpenAI') as mock_openai:
+        with patch("floship_llm.client.OpenAI") as mock_openai:
             llm = LLM()
 
             mock_embedding = Mock()
@@ -314,13 +316,13 @@ class TestAPIRetry:
                     raise APIStatusError(
                         message="Server error",
                         response=Mock(status_code=500),
-                        body={"error": "Server error"}
+                        body={"error": "Server error"},
                     )
                 return mock_embedding
 
             mock_openai.return_value.embeddings.create = mock_create
 
-            with patch('time.sleep'):
+            with patch("time.sleep"):
                 result = llm.embed("Test text")
 
             assert call_count == 2

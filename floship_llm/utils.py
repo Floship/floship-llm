@@ -2,8 +2,10 @@ try:
     import regex as re
 except ImportError:
     import re
+
 import json
-from typing import List, Any
+from typing import Any, List
+
 
 class JSONUtils:
     JSON_CANDIDATE = re.compile(
@@ -19,7 +21,10 @@ class JSONUtils:
 
     CLEANUPS = [
         (re.compile(r"(?P<pre>[:\[,]\s*)'(?P<body>[^']*)'"), r'\g<pre>"\g<body>"'),
-        (re.compile(r"(?P<brace>[\{\s,])(?P<key>[A-Za-z0-9_]+)\s*:"), r'\g<brace>"\g<key>":'),
+        (
+            re.compile(r"(?P<brace>[\{\s,])(?P<key>[A-Za-z0-9_]+)\s*:"),
+            r'\g<brace>"\g<key>":',
+        ),
         (re.compile(r",\s*(?P<brace>[}\]])"), r"\g<brace>"),
         (re.compile(r"\\'"), "'"),
         (re.compile(r"[\x00-\x1f]"), ""),
@@ -63,7 +68,7 @@ class JSONUtils:
         params = {"ensure_ascii": False, "sort_keys": True, "indent": 2}
         params.update(dump_kwargs)
         return json.dumps(obj, **params)
-    
+
     def extract_strict_json(self, text: str) -> str:
         """
         Extract the first valid JSON object from the text.
@@ -74,6 +79,7 @@ class JSONUtils:
             return self.strict_json(results[0])
         return ""
 
+
 lm_json_utils = JSONUtils()
 
 
@@ -81,10 +87,10 @@ def estimate_tokens(text: str) -> int:
     """
     Estimate the number of tokens in a text string.
     Uses a simple approximation: ~4 characters per token.
-    
+
     Args:
         text: The text to estimate tokens for
-        
+
     Returns:
         Estimated token count
     """
@@ -98,27 +104,26 @@ def estimate_tokens(text: str) -> int:
 def truncate_to_tokens(text: str, max_tokens: int) -> str:
     """
     Truncate text to approximately fit within max_tokens.
-    
+
     Args:
         text: The text to truncate
         max_tokens: Maximum number of tokens
-        
+
     Returns:
         Truncated text with ellipsis if truncation occurred
     """
     if not text:
         return text
-    
+
     estimated_tokens = estimate_tokens(text)
     if estimated_tokens <= max_tokens:
         return text
-    
+
     # Calculate approximate character limit
     max_chars = max_tokens * 4
-    
+
     if len(text) <= max_chars:
         return text
-    
+
     # Truncate and add indicator
     return text[:max_chars] + "...[truncated]"
-

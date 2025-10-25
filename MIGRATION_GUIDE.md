@@ -87,7 +87,7 @@ from floship_llm import LLM
 
 # Set environment variables
 # INFERENCE_URL - Your LLM API endpoint
-# INFERENCE_MODEL_ID - Model identifier  
+# INFERENCE_MODEL_ID - Model identifier
 # INFERENCE_KEY - API key
 
 # Create client
@@ -130,12 +130,12 @@ export INFERENCE_SUPPORTS_PARALLEL_REQUESTS="True"  # Optional, default: True
 
 ## Features of the Library
 
-✅ **Zero Django Dependencies** - Can be used in any Python project  
-✅ **OpenAI Compatible** - Works with any OpenAI-compatible API  
-✅ **Structured Output** - Pydantic schema validation  
-✅ **Conversation History** - Multi-turn conversations  
-✅ **JSON Parsing** - Robust JSON extraction from LLM responses  
-✅ **Configurable** - Temperature, penalties, token limits  
+✅ **Zero Django Dependencies** - Can be used in any Python project
+✅ **OpenAI Compatible** - Works with any OpenAI-compatible API
+✅ **Structured Output** - Pydantic schema validation
+✅ **Conversation History** - Multi-turn conversations
+✅ **JSON Parsing** - Robust JSON extraction from LLM responses
+✅ **Configurable** - Temperature, penalties, token limits
 ✅ **Well Documented** - Comprehensive README with examples
 
 ## Publishing the Library (Future)

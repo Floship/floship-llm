@@ -219,13 +219,13 @@ weather_tool = ToolFunction(
     description="Get current weather for a location",
     parameters=[
         ToolParameter(
-            name="location", 
-            type="string", 
+            name="location",
+            type="string",
             description="City name",
             required=True
         ),
         ToolParameter(
-            name="units", 
+            name="units",
             type="string",
             enum=["celsius", "fahrenheit"],
             default="celsius"
@@ -356,7 +356,7 @@ llm.add_tool_from_function(generate_chart)
 
 # LLM will call tools in sequence as needed
 response = llm.prompt("""
-    Load sales data from 'Q4_sales.csv', 
+    Load sales data from 'Q4_sales.csv',
     filter for amounts > $1000,
     calculate average and total,
     then create a bar chart

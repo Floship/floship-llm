@@ -3,6 +3,7 @@
 import os
 import time
 from unittest.mock import Mock, patch
+
 import pytest
 
 from floship_llm import LLM
@@ -14,47 +15,47 @@ class TestToolRequestDelay:
 
     def setup_method(self):
         """Set up test environment."""
-        os.environ['INFERENCE_URL'] = 'http://test.com'
-        os.environ['INFERENCE_MODEL_ID'] = 'test-model'
-        os.environ['INFERENCE_KEY'] = 'test-key'
+        os.environ["INFERENCE_URL"] = "http://test.com"
+        os.environ["INFERENCE_MODEL_ID"] = "test-model"
+        os.environ["INFERENCE_KEY"] = "test-key"
 
     def teardown_method(self):
         """Clean up test environment."""
-        if 'LLM_TOOL_REQUEST_DELAY' in os.environ:
-            del os.environ['LLM_TOOL_REQUEST_DELAY']
+        if "LLM_TOOL_REQUEST_DELAY" in os.environ:
+            del os.environ["LLM_TOOL_REQUEST_DELAY"]
 
     def test_default_tool_request_delay(self):
         """Test that default tool request delay is 0 seconds."""
-        with patch('floship_llm.client.OpenAI'):
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM(enable_tools=True)
             assert llm.tool_request_delay == 0.0
 
     def test_custom_tool_request_delay_from_env(self):
         """Test that tool request delay can be set via environment variable."""
-        os.environ['LLM_TOOL_REQUEST_DELAY'] = '3'
-        with patch('floship_llm.client.OpenAI'):
+        os.environ["LLM_TOOL_REQUEST_DELAY"] = "3"
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM(enable_tools=True)
             assert llm.tool_request_delay == 3.0
 
     def test_tool_request_delay_with_decimal(self):
         """Test that tool request delay accepts decimal values."""
-        os.environ['LLM_TOOL_REQUEST_DELAY'] = '2.5'
-        with patch('floship_llm.client.OpenAI'):
+        os.environ["LLM_TOOL_REQUEST_DELAY"] = "2.5"
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM(enable_tools=True)
             assert llm.tool_request_delay == 2.5
 
     def test_zero_delay(self):
         """Test that delay can be disabled by setting to 0."""
-        os.environ['LLM_TOOL_REQUEST_DELAY'] = '0'
-        with patch('floship_llm.client.OpenAI'):
+        os.environ["LLM_TOOL_REQUEST_DELAY"] = "0"
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM(enable_tools=True)
             assert llm.tool_request_delay == 0.0
 
     def test_delay_is_applied_after_tool_execution(self):
         """Test that delay is actually applied after tool execution."""
-        os.environ['LLM_TOOL_REQUEST_DELAY'] = '2'
-        
-        with patch('floship_llm.client.OpenAI') as mock_openai:
+        os.environ["LLM_TOOL_REQUEST_DELAY"] = "2"
+
+        with patch("floship_llm.client.OpenAI") as mock_openai:
             llm = LLM(enable_tools=True)
 
             def test_func():
@@ -64,7 +65,7 @@ class TestToolRequestDelay:
                 name="test_tool",
                 description="Test tool",
                 parameters=[],
-                function=test_func
+                function=test_func,
             )
             llm.add_tool(tool)
 
@@ -95,10 +96,12 @@ class TestToolRequestDelay:
             mock_follow_up_response = Mock()
             mock_follow_up_response.choices = [mock_follow_up_choice]
 
-            mock_openai.return_value.chat.completions.create.return_value = mock_follow_up_response
+            mock_openai.return_value.chat.completions.create.return_value = (
+                mock_follow_up_response
+            )
 
             # Patch time.sleep to verify it's called
-            with patch('time.sleep') as mock_sleep:
+            with patch("time.sleep") as mock_sleep:
                 result = llm.process_response(mock_response)
 
                 # Verify sleep was called with the correct delay
@@ -106,9 +109,9 @@ class TestToolRequestDelay:
 
     def test_no_delay_when_set_to_zero(self):
         """Test that no delay is applied when set to 0."""
-        os.environ['LLM_TOOL_REQUEST_DELAY'] = '0'
-        
-        with patch('floship_llm.client.OpenAI') as mock_openai:
+        os.environ["LLM_TOOL_REQUEST_DELAY"] = "0"
+
+        with patch("floship_llm.client.OpenAI") as mock_openai:
             llm = LLM(enable_tools=True)
 
             def test_func():
@@ -118,7 +121,7 @@ class TestToolRequestDelay:
                 name="test_tool",
                 description="Test tool",
                 parameters=[],
-                function=test_func
+                function=test_func,
             )
             llm.add_tool(tool)
 
@@ -149,10 +152,12 @@ class TestToolRequestDelay:
             mock_follow_up_response = Mock()
             mock_follow_up_response.choices = [mock_follow_up_choice]
 
-            mock_openai.return_value.chat.completions.create.return_value = mock_follow_up_response
+            mock_openai.return_value.chat.completions.create.return_value = (
+                mock_follow_up_response
+            )
 
             # Patch time.sleep to verify it's NOT called
-            with patch('time.sleep') as mock_sleep:
+            with patch("time.sleep") as mock_sleep:
                 result = llm.process_response(mock_response)
 
                 # Verify sleep was NOT called when delay is 0
@@ -160,9 +165,9 @@ class TestToolRequestDelay:
 
     def test_delay_with_multiple_tool_calls(self):
         """Test that delay is applied once after all tools execute, not per tool."""
-        os.environ['LLM_TOOL_REQUEST_DELAY'] = '1.5'
-        
-        with patch('floship_llm.client.OpenAI') as mock_openai:
+        os.environ["LLM_TOOL_REQUEST_DELAY"] = "1.5"
+
+        with patch("floship_llm.client.OpenAI") as mock_openai:
             llm = LLM(enable_tools=True)
 
             def test_func():
@@ -172,7 +177,7 @@ class TestToolRequestDelay:
                 name="test_tool",
                 description="Test tool",
                 parameters=[],
-                function=test_func
+                function=test_func,
             )
             llm.add_tool(tool)
 
@@ -208,10 +213,12 @@ class TestToolRequestDelay:
             mock_follow_up_response = Mock()
             mock_follow_up_response.choices = [mock_follow_up_choice]
 
-            mock_openai.return_value.chat.completions.create.return_value = mock_follow_up_response
+            mock_openai.return_value.chat.completions.create.return_value = (
+                mock_follow_up_response
+            )
 
             # Patch time.sleep to verify it's called only once
-            with patch('time.sleep') as mock_sleep:
+            with patch("time.sleep") as mock_sleep:
                 result = llm.process_response(mock_response)
 
                 # Verify sleep was called only once with the correct delay

@@ -15,12 +15,12 @@ All tests **PASSED** ✅ after discovering and fixing critical parameter handlin
 ## Discovered Issues & Fixes
 
 ### Issue 1: Temperature vs Top_p Mutual Exclusivity
-**Severity:** Critical  
+**Severity:** Critical
 **Status:** FIXED ✅
 
 **Problem:**
 ```
-Error code: 400 - ValidationException: The model returned the following errors: 
+Error code: 400 - ValidationException: The model returned the following errors:
 `temperature` and `top_p` cannot both be specified for this model.
 ```
 
@@ -46,12 +46,12 @@ else:
 ---
 
 ### Issue 2: Extended Thinking Requires Temperature = 1.0
-**Severity:** Critical  
+**Severity:** Critical
 **Status:** FIXED ✅
 
 **Problem:**
 ```
-Error code: 400 - ValidationException: The model returned the following errors: 
+Error code: 400 - ValidationException: The model returned the following errors:
 `temperature` may only be set to 1 when thinking is enabled.
 ```
 
@@ -82,12 +82,12 @@ else:
 ---
 
 ### Issue 3: Extended Thinking Budget Tokens Minimum
-**Severity:** Medium  
+**Severity:** Medium
 **Status:** FIXED ✅
 
 **Problem:**
 ```
-Error code: 400 - ValidationException: The model returned the following errors: 
+Error code: 400 - ValidationException: The model returned the following errors:
 thinking.enabled.budget_tokens: Input should be greater than or equal to 1024
 ```
 
@@ -110,7 +110,7 @@ llm = LLM(
 ---
 
 ### Issue 4: OpenAI SDK Parameter Compatibility
-**Severity:** High  
+**Severity:** High
 **Status:** FIXED ✅
 
 **Problem:**
@@ -143,7 +143,7 @@ if extra_body:
 ---
 
 ### Issue 5: API URL Format
-**Severity:** Low  
+**Severity:** Low
 **Status:** FIXED ✅
 
 **Problem:** Initial 404 errors when connecting to API.
@@ -159,8 +159,8 @@ if extra_body:
 ## Test Results
 
 ### Test 1: Basic Prompt ✅
-**Status:** PASSED  
-**Description:** Simple prompt without additional parameters  
+**Status:** PASSED
+**Description:** Simple prompt without additional parameters
 **Response:** Successfully received response from Claude
 
 ```python
@@ -173,8 +173,8 @@ response = llm.prompt("Hello from Heroku Inference API! Who are you?")
 ---
 
 ### Test 2a: Heroku-Specific Parameters (temperature + top_k) ✅
-**Status:** PASSED  
-**Description:** Test with temperature and top_k (without top_p)  
+**Status:** PASSED
+**Description:** Test with temperature and top_k (without top_p)
 **Configuration:**
 ```python
 llm = LLM(
@@ -190,8 +190,8 @@ llm = LLM(
 ---
 
 ### Test 2b: Heroku-Specific Parameters (top_p only) ✅
-**Status:** PASSED  
-**Description:** Test with top_p instead of temperature  
+**Status:** PASSED
+**Description:** Test with top_p instead of temperature
 **Configuration:**
 ```python
 llm = LLM(
@@ -206,8 +206,8 @@ llm = LLM(
 ---
 
 ### Test 3: Extended Thinking ✅
-**Status:** PASSED  
-**Description:** Test extended thinking feature with correct constraints  
+**Status:** PASSED
+**Description:** Test extended thinking feature with correct constraints
 **Configuration:**
 ```python
 llm = LLM(
@@ -220,14 +220,14 @@ llm = LLM(
 )
 ```
 
-**Prompt:** "What is 15 * 23?"  
+**Prompt:** "What is 15 * 23?"
 **Result:** "15 * 23 = 345" ✅
 
 ---
 
 ### Test 4: Tool Calling ✅
-**Status:** PASSED  
-**Description:** Test tool/function calling with JSON serialization  
+**Status:** PASSED
+**Description:** Test tool/function calling with JSON serialization
 **Configuration:**
 ```python
 def add_numbers(a: int, b: int) -> int:
@@ -237,7 +237,7 @@ llm = LLM(model="claude-4-5-sonnet", enable_tools=True)
 llm.add_tool_from_function(add_numbers)
 ```
 
-**Prompt:** "What is 42 plus 58?"  
+**Prompt:** "What is 42 plus 58?"
 **Result:** Tool executed correctly, returned "The sum of 42 plus 58 is **100**." ✅
 
 ---

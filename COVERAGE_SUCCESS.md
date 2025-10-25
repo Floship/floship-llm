@@ -6,7 +6,7 @@
 - **Previous Coverage**: 95%
 - **Current Coverage**: 99.31%
 - **Test Count**: 173 tests (up from 166)
-- **Files with 100% Coverage**: 
+- **Files with 100% Coverage**:
   - `floship_llm/client.py` ✅
   - `floship_llm/schemas.py` ✅
   - `floship_llm/__init__.py` ✅
@@ -40,7 +40,7 @@
 - ✅ `add_tool_from_function()` for easy Python function wrapping
 - ✅ Seamless conversation flow with tool results
 
-### **3. Improved Retry Mechanism** 
+### **3. Improved Retry Mechanism**
 - ✅ `max_retry` parameter (default: 3)
 - ✅ Retry counter tracking and reset
 - ✅ Graceful degradation when limits exceeded
@@ -66,7 +66,7 @@
 - Simple retry mechanism
 - Good test coverage
 
-### **Capabilities After** 
+### **Capabilities After**
 - **🤖 Agent Framework**: LLM can execute Python functions
 - **🔗 Workflow Automation**: Chain multiple tools together
 - **📊 Real-time Processing**: Calculate, fetch data, process files
@@ -84,7 +84,7 @@
 
 ### **New Files**
 - `tests/test_tools.py` - 25 comprehensive tool tests
-- `examples_tools.py` - Real-world tool usage examples  
+- `examples_tools.py` - Real-world tool usage examples
 - `TOOLS_IMPLEMENTATION.md` - Technical documentation
 
 ### **Modified Files**
@@ -109,7 +109,7 @@
 
 The FloShip LLM client has evolved from a simple chat interface to a **powerful agent framework** capable of:
 - Executing calculations and data processing
-- Making API calls and web requests  
+- Making API calls and web requests
 - Automating multi-step workflows
 - Integrating with databases and file systems
 - Providing real-time, actionable responses
