@@ -55,6 +55,7 @@ class LLM:
         # Tool support
         self.tools: Dict[str, ToolFunction] = {} # Available tools/functions
         self.enable_tools = kwargs.get('enable_tools', False) # Whether to enable tool calls
+        self.tool_request_delay = float(os.environ.get('LLM_TOOL_REQUEST_DELAY', '5'))  # Delay in seconds between tool execution and follow-up request
         
         if self.system:
             self.add_message("system", self.system)
@@ -556,6 +557,11 @@ class LLM:
         
         # Validate and sanitize messages before sending to LLM
         validated_messages = self._validate_messages_for_api(self.messages)
+        
+        # Add delay before follow-up request to avoid rate limiting
+        if self.tool_request_delay > 0:
+            logger.info(f"Waiting {self.tool_request_delay}s before follow-up request after tool execution")
+            time.sleep(self.tool_request_delay)
         
         follow_up_response = self._api_call_with_retry(
             self.client.chat.completions.create,
