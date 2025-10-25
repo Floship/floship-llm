@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2025-10-25
+
+### Added
+- **Tool Call Tracking:** Comprehensive tracking of tool invocations for resource budgeting and monitoring
+  - New public API methods:
+    - `get_last_tool_call_count()` - Returns total number of tool calls from last prompt
+    - `get_last_tool_history()` - Returns detailed history with metadata for each tool call
+    - `get_last_recursion_depth()` - Returns maximum recursion depth reached
+    - `get_last_response_metadata()` - Returns complete metadata dictionary
+  - Tracks detailed metadata for each tool call:
+    - Tool name, arguments, and execution time
+    - Recursion depth (for nested tool calls)
+    - Result length and token usage
+    - Timestamp and error status (for failed calls)
+  - Enables accurate resource budgeting, cost estimation, and rate limiting
+  - See `TOOL_TRACKING_IMPLEMENTATION.md` for complete documentation
+
+### Changed
+- Enhanced `_handle_tool_calls()` method to track recursion depth
+- Updated `prompt()` method to reset and store tracking metadata
+- Improved logging to show tool call progression and recursion depth
+
+### Fixed
+- Fixed error handling in tool call tracking when JSON parsing fails
+- Ensured `arguments` variable is properly initialized before use in error handling
+
+### Testing
+- All 260 tests passing
+- Test coverage: 93%
+- Added comprehensive tracking validation
+
 ## [0.1.1] - 2025-10-25
 
 ### Fixed

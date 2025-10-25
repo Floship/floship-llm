@@ -137,6 +137,12 @@ class LLM:
         self.enable_tools = kwargs.get("enable_tools", False)
         self.tool_request_delay = float(os.environ.get("LLM_TOOL_REQUEST_DELAY", "0"))
 
+        # Tool call tracking (for monitoring and budgeting)
+        self._current_tool_call_count = 0
+        self._current_recursion_depth = 0
+        self._current_tool_history = []
+        self._last_response_metadata = {}
+
         # Backward compatibility - maintain tools dict reference
         self.tools = self.tool_manager.tools
 
@@ -345,7 +351,20 @@ class LLM:
 
         Returns:
             Generated response text or structured output
+
+        Note:
+            After calling this method, you can access tool call metadata via:
+            - llm.get_last_tool_call_count(): Number of tool calls made
+            - llm.get_last_tool_history(): List of tools called with details
+            - llm.get_last_recursion_depth(): How deep the tool call chain went
         """
+        # Reset tool tracking for new prompt
+        if not retry:
+            self._current_tool_call_count = 0
+            self._current_recursion_depth = 0
+            self._current_tool_history = []
+            self._last_response_metadata = {}
+
         if prompt and not retry:
             self.retry_count = 0
             if system:
@@ -363,6 +382,13 @@ class LLM:
         )
 
         result = self.process_response(response)
+
+        # Store final metadata
+        self._last_response_metadata = {
+            "total_tool_calls": self._current_tool_call_count,
+            "recursion_depth": self._current_recursion_depth,
+            "tool_history": self._current_tool_history.copy(),
+        }
 
         if not self.continuous:
             self.reset()
@@ -453,17 +479,23 @@ class LLM:
 
         return response.choices[0].message.content
 
-    def _handle_tool_calls(self, message, original_response):
+    def _handle_tool_calls(self, message, original_response, recursion_depth=0):
         """
         Execute tool calls and get follow-up response.
 
         Args:
             message: Message with tool calls
             original_response: Original API response
+            recursion_depth: Current recursion depth (for tracking)
 
         Returns:
             Final response after tool execution
         """
+        # Update recursion depth tracking
+        self._current_recursion_depth = max(
+            self._current_recursion_depth, recursion_depth
+        )
+
         # Build assistant message with tool calls
         assistant_message = {
             "role": "assistant",
@@ -495,9 +527,11 @@ class LLM:
 
         # Execute tool calls
         start_time = time.time()
+        iteration_tool_count = len(message.tool_calls)
 
         for tool_call in message.tool_calls:
             tool_start_time = time.time()
+            arguments = None  # Initialize to None for error handling
 
             try:
                 # Parse and execute
@@ -516,6 +550,26 @@ class LLM:
                     execution_time=execution_time,
                 )
 
+                # Track tool call in history
+                self._current_tool_call_count += 1
+                tool_entry = {
+                    "index": self._current_tool_call_count,
+                    "tool": tool_call.function.name,
+                    "arguments": arguments,
+                    "recursion_depth": recursion_depth,
+                    "execution_time_ms": int(execution_time * 1000),
+                    "result_length": len(str(result.content)),
+                    "timestamp": time.time(),
+                }
+
+                # Add token info if available
+                if "metadata" in processed:
+                    meta = processed["metadata"]
+                    tool_entry["tokens"] = meta.get("final_tokens", 0)
+                    tool_entry["was_truncated"] = meta.get("was_truncated", False)
+
+                self._current_tool_history.append(tool_entry)
+
                 # Build tool message
                 tool_message = {
                     "role": "tool",
@@ -532,18 +586,39 @@ class LLM:
                 if "metadata" in processed:
                     meta = processed["metadata"]
                     logger.info(
-                        f"Executed tool {tool_call.function.name}: "
+                        f"Executed tool {tool_call.function.name} "
+                        f"(#{self._current_tool_call_count}, depth={recursion_depth}): "
                         f"tokens={meta['final_tokens']}, "
                         f"time={meta.get('execution_time_ms', 0)}ms, "
                         f"sanitized={meta['was_sanitized']}, "
                         f"truncated={meta['was_truncated']}"
                     )
                 else:
-                    logger.info(f"Executed tool {tool_call.function.name}")
+                    logger.info(
+                        f"Executed tool {tool_call.function.name} "
+                        f"(#{self._current_tool_call_count}, depth={recursion_depth})"
+                    )
 
             except Exception as e:
                 logger.error(
                     f"Error processing tool call {tool_call.function.name}: {str(e)}"
+                )
+
+                # Still track failed tool calls (arguments may be None if parsing failed)
+                self._current_tool_call_count += 1
+                self._current_tool_history.append(
+                    {
+                        "index": self._current_tool_call_count,
+                        "tool": tool_call.function.name,
+                        "arguments": (
+                            arguments
+                            if arguments is not None
+                            else tool_call.function.arguments
+                        ),
+                        "recursion_depth": recursion_depth,
+                        "error": str(e),
+                        "timestamp": time.time(),
+                    }
                 )
 
                 processed = self.content_processor.process_tool_response(
@@ -561,7 +636,8 @@ class LLM:
         # Log summary
         total_time = time.time() - start_time
         logger.info(
-            f"Executed {len(message.tool_calls)} tool(s) in {total_time*1000:.0f}ms"
+            f"Executed {iteration_tool_count} tool(s) in this iteration "
+            f"(total: {self._current_tool_call_count}) in {total_time*1000:.0f}ms"
         )
 
         # Add delay before follow-up
@@ -577,7 +653,20 @@ class LLM:
             self.client.chat.completions.create, **params, messages=validated_messages
         )
 
-        return self.process_response(follow_up_response)
+        # Check if follow-up has more tool calls (recursive case)
+        if (
+            hasattr(follow_up_response.choices[0].message, "tool_calls")
+            and follow_up_response.choices[0].message.tool_calls
+        ):
+            # Recursive tool calls - go deeper
+            return self._handle_tool_calls(
+                follow_up_response.choices[0].message,
+                follow_up_response,
+                recursion_depth=recursion_depth + 1,
+            )
+        else:
+            # No more tool calls - return final response
+            return self.process_response(follow_up_response)
 
     def _validate_messages_for_api(self, messages: List[Dict]) -> List[Dict]:
         """
@@ -695,6 +784,73 @@ class LLM:
         self.tool_manager.clear_tools()
 
     # ========== Backward Compatibility ==========
+
+    def get_last_tool_call_count(self) -> int:
+        """
+        Get the number of tool calls made in the last prompt() invocation.
+
+        Returns:
+            Total number of tool calls across all recursive invocations
+
+        Example:
+            >>> llm = LLM(enable_tools=True)
+            >>> response = llm.prompt("Research this topic")
+            >>> print(f"Used {llm.get_last_tool_call_count()} tool calls")
+            Used 15 tool calls
+        """
+        return self._last_response_metadata.get("total_tool_calls", 0)
+
+    def get_last_tool_history(self) -> List[Dict[str, Any]]:
+        """
+        Get detailed history of all tool calls from the last prompt() invocation.
+
+        Returns:
+            List of dictionaries containing tool call details:
+            - index: Sequential tool call number
+            - tool: Tool name
+            - arguments: Arguments passed to tool
+            - recursion_depth: How deep in the call chain
+            - execution_time_ms: Execution time in milliseconds
+            - result_length: Length of result
+            - tokens: Token count (if available)
+            - was_truncated: Whether result was truncated
+            - error: Error message (if tool failed)
+
+        Example:
+            >>> history = llm.get_last_tool_history()
+            >>> for call in history:
+            ...     print(f"{call['index']}. {call['tool']} (depth={call['recursion_depth']})")
+        """
+        return self._last_response_metadata.get("tool_history", [])
+
+    def get_last_recursion_depth(self) -> int:
+        """
+        Get the maximum recursion depth of tool calls in the last prompt() invocation.
+
+        Returns:
+            Maximum recursion depth (0 = no tool calls, 1+ = recursive calls)
+
+        Example:
+            >>> llm.prompt("Complex research task")
+            >>> print(f"Tool chain went {llm.get_last_recursion_depth()} levels deep")
+        """
+        return self._last_response_metadata.get("recursion_depth", 0)
+
+    def get_last_response_metadata(self) -> Dict[str, Any]:
+        """
+        Get complete metadata from the last prompt() invocation.
+
+        Returns:
+            Dictionary containing:
+            - total_tool_calls: Total number of tool calls
+            - recursion_depth: Maximum recursion depth
+            - tool_history: Detailed history of all tool calls
+
+        Example:
+            >>> metadata = llm.get_last_response_metadata()
+            >>> print(f"Metadata: {metadata}")
+        """
+        return self._last_response_metadata.copy()
 
     def _sanitize_tool_response(self, content: str) -> str:
         """Sanitize tool response (backward compatibility)."""
