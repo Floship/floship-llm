@@ -24,10 +24,10 @@ class TestToolRequestDelay:
             del os.environ['LLM_TOOL_REQUEST_DELAY']
 
     def test_default_tool_request_delay(self):
-        """Test that default tool request delay is 5 seconds."""
+        """Test that default tool request delay is 0 seconds."""
         with patch('floship_llm.client.OpenAI'):
             llm = LLM(enable_tools=True)
-            assert llm.tool_request_delay == 5.0
+            assert llm.tool_request_delay == 0.0
 
     def test_custom_tool_request_delay_from_env(self):
         """Test that tool request delay can be set via environment variable."""

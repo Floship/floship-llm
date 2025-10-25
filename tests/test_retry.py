@@ -41,35 +41,28 @@ class TestAPIRetry:
             assert result == "Success"
 
     def test_api_call_with_retry_403_error(self):
-        """Test retry on 403 Forbidden error."""
+        """Test that 403 Forbidden error is NOT retried (CloudFront WAF compatibility)."""
         with patch('floship_llm.client.OpenAI') as mock_openai:
             llm = LLM()
-
-            mock_response = Mock()
-            mock_response.choices = [Mock()]
-            mock_response.choices[0].message.content = "Success"
-            mock_response.choices[0].message.tool_calls = None
 
             call_count = 0
 
             def mock_create(*args, **kwargs):
                 nonlocal call_count
                 call_count += 1
-                if call_count <= 2:
-                    raise APIStatusError(
-                        message="Request blocked",
-                        response=Mock(status_code=403),
-                        body={"error": "Request blocked"}
-                    )
-                return mock_response
+                raise APIStatusError(
+                    message="Request blocked",
+                    response=Mock(status_code=403),
+                    body={"error": "Request blocked"}
+                )
 
             mock_openai.return_value.chat.completions.create = mock_create
 
-            with patch('time.sleep'):  # Speed up test
-                result = llm.prompt("Test prompt")
+            with pytest.raises(APIStatusError):
+                llm.prompt("Test prompt")
 
-            assert call_count == 3
-            assert result == "Success"
+            # Should only try once (no retry on 403)
+            assert call_count == 1
 
     def test_api_call_with_retry_429_error(self):
         """Test retry on 429 Rate Limit error."""
@@ -174,9 +167,9 @@ class TestAPIRetry:
                 nonlocal call_count
                 call_count += 1
                 raise APIStatusError(
-                    message="Request blocked",
-                    response=Mock(status_code=403),
-                    body={"error": "Request blocked"}
+                    message="Server error",
+                    response=Mock(status_code=500),
+                    body={"error": "Server error"}
                 )
 
             mock_openai.return_value.chat.completions.create = mock_create
@@ -229,9 +222,9 @@ class TestAPIRetry:
                 call_count += 1
                 if call_count <= 2:
                     raise APIStatusError(
-                        message="Request blocked",
-                        response=Mock(status_code=403),
-                        body={"error": "Request blocked"}
+                        message="Server error",
+                        response=Mock(status_code=500),
+                        body={"error": "Server error"}
                     )
                 return mock_response
 
@@ -249,8 +242,8 @@ class TestAPIRetry:
 
     def test_api_call_with_retry_all_status_codes(self):
         """Test retry behavior for various status codes."""
-        retryable_codes = [403, 429, 500, 502, 503, 504]
-        non_retryable_codes = [400, 401, 404]
+        retryable_codes = [429, 500, 502, 503, 504]
+        non_retryable_codes = [400, 401, 403, 404]
 
         for status_code in retryable_codes:
             with patch('floship_llm.client.OpenAI') as mock_openai:
@@ -319,9 +312,9 @@ class TestAPIRetry:
                 call_count += 1
                 if call_count == 1:
                     raise APIStatusError(
-                        message="Request blocked",
-                        response=Mock(status_code=403),
-                        body={"error": "Request blocked"}
+                        message="Server error",
+                        response=Mock(status_code=500),
+                        body={"error": "Server error"}
                     )
                 return mock_embedding
 
