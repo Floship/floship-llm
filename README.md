@@ -119,6 +119,49 @@ print()  # New line after streaming completes
 - Use the regular `prompt()` method if you need tool support
 - Streaming responses are added to conversation history automatically
 
+### Streaming Final Response After Tools
+
+**NEW in v0.4.0:** Stream the final response even when using tools!
+
+```python
+from floship_llm import LLM, ToolFunction, ToolParameter
+
+llm = LLM(enable_tools=True)
+
+# Add a tool
+llm.add_tool(
+    ToolFunction(
+        name="calculate",
+        description="Perform calculations",
+        parameters=[
+            ToolParameter(name="expression", type="string", description="Math expression")
+        ],
+        function=lambda expr: str(eval(expr))
+    )
+)
+
+# Stream the final response after tool execution
+result = llm.prompt(
+    "Calculate 15 * 8 and explain the result",
+    stream_final_response=True
+)
+
+# Result is a generator if tools were used
+if hasattr(result, "__iter__") and not isinstance(result, str):
+    for chunk in result:
+        print(chunk, end="", flush=True)
+else:
+    print(result)  # No tools used, returned as string
+```
+
+**How it works:**
+1. Tools execute normally (non-streaming)
+2. After all tools complete, the final LLM response streams in real-time
+3. Provides better UX for long responses after tool execution
+4. Automatically handles recursive tool calls (falls back to non-streaming if needed)
+
+**See also:** `example_stream_with_tools.py` for complete examples
+
 ### Using Extended Thinking (Claude Models)
 
 Extended thinking allows Claude models to spend more time reasoning before responding. This is particularly useful for complex problems:

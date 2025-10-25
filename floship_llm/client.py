@@ -344,6 +344,7 @@ class LLM:
         prompt: Optional[str] = None,
         system: Optional[str] = None,
         retry: bool = False,
+        stream_final_response: bool = False,
     ) -> str:
         """
         Generate completion from prompt.
@@ -352,15 +353,30 @@ class LLM:
             prompt: User prompt
             system: Optional system message
             retry: Internal retry flag
+            stream_final_response: If True and tools are used, stream the final response
+                                  after tools complete (generator). If False or no tools
+                                  are used, returns complete response as string.
 
         Returns:
-            Generated response text or structured output
+            Generated response text, structured output, or generator (if streaming final response)
 
         Note:
             After calling this method, you can access tool call metadata via:
             - llm.get_last_tool_call_count(): Number of tool calls made
             - llm.get_last_tool_history(): List of tools called with details
             - llm.get_last_recursion_depth(): How deep the tool call chain went
+
+        Example:
+            # Regular usage
+            response = llm.prompt("What's 2+2?")
+
+            # Streaming final response after tools
+            result = llm.prompt("What's 2+2?", stream_final_response=True)
+            if isinstance(result, str):
+                print(result)  # No tools were used
+            else:
+                for chunk in result:  # Tools were used, streaming final response
+                    print(chunk, end="", flush=True)
         """
         # Reset tool tracking for new prompt
         if not retry:
@@ -385,7 +401,9 @@ class LLM:
             self.client.chat.completions.create, **params, messages=validated_messages
         )
 
-        result = self.process_response(response)
+        result = self.process_response(
+            response, stream_final_response=stream_final_response
+        )
 
         # Store final metadata
         self._last_response_metadata = {
@@ -496,15 +514,16 @@ class LLM:
 
     # ========== Response Processing ==========
 
-    def process_response(self, response) -> str:
+    def process_response(self, response, stream_final_response: bool = False) -> str:
         """
         Process LLM response, handling tool calls if present.
 
         Args:
             response: OpenAI API response
+            stream_final_response: If True, stream the final response after tools complete
 
         Returns:
-            Processed response text or structured output
+            Processed response text, structured output, or generator (if streaming)
         """
         choice = response.choices[0]
 
@@ -518,7 +537,11 @@ class LLM:
                     hasattr(choice.message.tool_calls, "__iter__")
                     and len(choice.message.tool_calls) > 0
                 ):
-                    return self._handle_tool_calls(choice.message, response)
+                    return self._handle_tool_calls(
+                        choice.message,
+                        response,
+                        stream_final_response=stream_final_response,
+                    )
             except (TypeError, AttributeError):
                 pass  # Mock object, skip tool handling
 
@@ -556,7 +579,9 @@ class LLM:
 
         return response.choices[0].message.content
 
-    def _handle_tool_calls(self, message, original_response, recursion_depth=0):
+    def _handle_tool_calls(
+        self, message, original_response, recursion_depth=0, stream_final_response=False
+    ):
         """
         Execute tool calls and get follow-up response.
 
@@ -564,9 +589,10 @@ class LLM:
             message: Message with tool calls
             original_response: Original API response
             recursion_depth: Current recursion depth (for tracking)
+            stream_final_response: If True, stream the final response after all tools complete
 
         Returns:
-            Final response after tool execution
+            Final response after tool execution (string or generator if streaming)
         """
         # Update recursion depth tracking
         self._current_recursion_depth = max(
@@ -722,28 +748,95 @@ class LLM:
             logger.info(f"Waiting {self.tool_request_delay}s before follow-up request")
             time.sleep(self.tool_request_delay)
 
-        # Get follow-up response
+        # Get follow-up response - with or without streaming
         params = self.get_request_params()
         validated_messages = self._validate_messages_for_api(self.messages)
 
-        follow_up_response = self.retry_handler.execute_with_retry(
-            self.client.chat.completions.create, **params, messages=validated_messages
-        )
+        # Check if we should stream the final response
+        if stream_final_response:
+            # Enable streaming for the follow-up request
+            params["stream"] = True
 
-        # Check if follow-up has more tool calls (recursive case)
-        if (
-            hasattr(follow_up_response.choices[0].message, "tool_calls")
-            and follow_up_response.choices[0].message.tool_calls
-        ):
-            # Recursive tool calls - go deeper
-            return self._handle_tool_calls(
-                follow_up_response.choices[0].message,
-                follow_up_response,
-                recursion_depth=recursion_depth + 1,
+            # Make streaming request
+            stream = self.client.chat.completions.create(
+                **params, messages=validated_messages
             )
+
+            # Check first chunk to see if there are more tool calls
+            first_chunk = next(stream, None)
+            if first_chunk and first_chunk.choices and len(first_chunk.choices) > 0:
+                first_delta = first_chunk.choices[0].delta
+
+                # Check for tool calls in the first chunk
+                if hasattr(first_delta, "tool_calls") and first_delta.tool_calls:
+                    # Has tool calls - need to handle them (can't stream with recursive tools)
+                    # Fall back to non-streaming for recursive tool calls
+                    logger.warning(
+                        "Recursive tool calls detected, falling back to non-streaming"
+                    )
+                    params["stream"] = False
+                    follow_up_response = self.retry_handler.execute_with_retry(
+                        self.client.chat.completions.create,
+                        **params,
+                        messages=validated_messages,
+                    )
+                    return self._handle_tool_calls(
+                        follow_up_response.choices[0].message,
+                        follow_up_response,
+                        recursion_depth=recursion_depth + 1,
+                        stream_final_response=stream_final_response,
+                    )
+
+                # No tool calls - stream the response
+                def generate_streamed_response():
+                    """Generator for streaming the final response."""
+                    full_response = ""
+
+                    # Yield the first chunk we already got
+                    if first_delta.content:
+                        full_response += first_delta.content
+                        yield first_delta.content
+
+                    # Yield remaining chunks
+                    for chunk in stream:
+                        if chunk.choices and len(chunk.choices) > 0:
+                            delta = chunk.choices[0].delta
+                            if delta.content:
+                                content = delta.content
+                                full_response += content
+                                yield content
+
+                    # Add complete response to conversation history
+                    if full_response:
+                        self.add_message("assistant", full_response)
+
+                return generate_streamed_response()
+            else:
+                # Empty response or no choices
+                return ""
         else:
-            # No more tool calls - return final response
-            return self.process_response(follow_up_response)
+            # Non-streaming follow-up (original behavior)
+            follow_up_response = self.retry_handler.execute_with_retry(
+                self.client.chat.completions.create,
+                **params,
+                messages=validated_messages,
+            )
+
+            # Check if follow-up has more tool calls (recursive case)
+            if (
+                hasattr(follow_up_response.choices[0].message, "tool_calls")
+                and follow_up_response.choices[0].message.tool_calls
+            ):
+                # Recursive tool calls - go deeper
+                return self._handle_tool_calls(
+                    follow_up_response.choices[0].message,
+                    follow_up_response,
+                    recursion_depth=recursion_depth + 1,
+                    stream_final_response=stream_final_response,
+                )
+            else:
+                # No more tool calls - return final response
+                return self.process_response(follow_up_response)
 
     def _validate_messages_for_api(self, messages: List[Dict]) -> List[Dict]:
         """
