@@ -19,7 +19,7 @@ from .schemas import (
 from .tool_manager import ToolManager
 from .utils import JSONUtils, lm_json_utils
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "LLM",

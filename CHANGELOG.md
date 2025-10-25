@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2025-10-25
+
+### Added
+- **Stream Final Response After Tools:** Major enhancement to streaming support
+  - New `stream_final_response` parameter for `prompt()` method
+  - Allows streaming the final LLM response even when tools are used
+  - Tools execute normally (non-streaming), then final response streams
+  - Returns generator when tools are used, string when no tools used
+  - Automatically handles recursive tool calls (falls back to non-streaming if more tools detected)
+  - Maintains conversation history with streamed final responses
+  - 4 comprehensive tests covering all scenarios
+- New `example_stream_with_tools.py` with 4 real-world examples
+- Updated README with "Streaming Final Response After Tools" section
+
+### Changed
+- `prompt()` method now accepts `stream_final_response` parameter (default: False)
+- `process_response()` method now accepts `stream_final_response` parameter
+- `_handle_tool_calls()` method now accepts `stream_final_response` parameter
+- Enhanced tool execution flow to support streaming final responses
+
+### Benefits
+- Better UX: See responses as they arrive, even with tools
+- Flexible: Returns string for backward compatibility when tools aren't used
+- Intelligent: Automatically detects and handles recursive tool calls
+- Backward compatible: Existing code works unchanged
+
 ## [0.3.0] - 2025-10-25
 
 ### Added

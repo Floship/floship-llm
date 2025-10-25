@@ -11,7 +11,7 @@ from openai.types.chat.chat_completion import Choice
 from pydantic import BaseModel
 
 from floship_llm.client import LLM
-from floship_llm.schemas import ThinkingModel
+from floship_llm.schemas import ThinkingModel, ToolFunction, ToolParameter
 
 
 class ResponseModelForTesting(BaseModel):
@@ -821,3 +821,259 @@ class TestLLM:
 
             # Should reset after streaming
             assert len(llm.messages) == 0
+
+    # ========== Streaming Final Response After Tools Tests ==========
+
+    def test_stream_final_response_with_tools(self):
+        """Test streaming final response after tool execution."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            mock_client = mock_openai.return_value
+
+            # First response: tool call
+            mock_tool_call = Mock()
+            mock_tool_call.id = "call_123"
+            mock_tool_call.function.name = "test_tool"
+            mock_tool_call.function.arguments = '{"arg": "value"}'
+
+            mock_message = Mock()
+            mock_message.tool_calls = [mock_tool_call]
+            mock_message.content = None
+
+            first_response = Mock()
+            first_response.choices = [Mock(message=mock_message)]
+
+            # Streaming follow-up response
+            mock_chunk1 = Mock()
+            mock_chunk1.choices = [Mock(delta=Mock(content="Final ", tool_calls=None))]
+            mock_chunk2 = Mock()
+            mock_chunk2.choices = [Mock(delta=Mock(content="answer", tool_calls=None))]
+
+            mock_stream = iter([mock_chunk1, mock_chunk2])
+
+            # Setup mock to return first response, then stream
+            call_count = 0
+
+            def mock_create(**kwargs):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    return first_response
+                else:
+                    return mock_stream
+
+            mock_client.chat.completions.create = mock_create
+
+            # Setup tool
+            llm = LLM(enable_tools=True, continuous=False)
+
+            def test_func(arg: str):
+                """Test function"""
+                return "Tool result"
+
+            llm.add_tool(
+                ToolFunction(
+                    name="test_tool",
+                    description="Test tool",
+                    parameters=[
+                        ToolParameter(name="arg", type="string", description="Test arg")
+                    ],
+                    function=test_func,
+                )
+            )
+
+            # Execute with streaming
+            result = llm.prompt("Test", stream_final_response=True)
+
+            # Should return a generator
+            assert hasattr(result, "__iter__")
+            assert hasattr(result, "__next__")
+
+            # Consume the generator
+            chunks = list(result)
+            assert chunks == ["Final ", "answer"]
+            assert "".join(chunks) == "Final answer"
+
+    def test_stream_final_response_no_tools_returns_string(self):
+        """Test that streaming flag is ignored when no tools are used."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            mock_client = mock_openai.return_value
+
+            # Regular response (no tool calls)
+            mock_message = Mock()
+            mock_message.tool_calls = None
+            mock_message.content = "Direct answer"
+
+            response = Mock()
+            response.choices = [Mock(message=mock_message)]
+
+            mock_client.chat.completions.create.return_value = response
+
+            llm = LLM(enable_tools=False, continuous=False)
+
+            # Even with stream_final_response=True, should return string (no tools used)
+            result = llm.prompt("Test", stream_final_response=True)
+
+            assert isinstance(result, str)
+            assert result == "Direct answer"
+
+    def test_stream_final_response_recursive_tools_fallback(self):
+        """Test that recursive tool calls fall back to non-streaming."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            mock_client = mock_openai.return_value
+
+            # First response: tool call
+            mock_tool_call1 = Mock()
+            mock_tool_call1.id = "call_1"
+            mock_tool_call1.function.name = "tool1"
+            mock_tool_call1.function.arguments = '{"arg": "value"}'
+
+            mock_message1 = Mock()
+            mock_message1.tool_calls = [mock_tool_call1]
+            mock_message1.content = None
+
+            first_response = Mock()
+            first_response.choices = [Mock(message=mock_message1)]
+
+            # When trying to stream follow-up, detect more tool calls
+            mock_tool_call2 = Mock()
+            mock_tool_call2.id = "call_2"
+            mock_tool_call2.function.name = "tool2"
+            mock_tool_call2.function.arguments = '{"arg": "value2"}'
+
+            # Streaming first chunk with tool calls (triggers fallback)
+            mock_stream_chunk = Mock()
+            mock_stream_chunk.choices = [
+                Mock(delta=Mock(tool_calls=[mock_tool_call2], content=None))
+            ]
+
+            # Non-streaming response after fallback
+            mock_message2 = Mock()
+            mock_message2.tool_calls = [mock_tool_call2]
+            mock_message2.content = None
+
+            second_response = Mock()
+            second_response.choices = [Mock(message=mock_message2)]
+
+            # Final response (no more tools)
+            mock_message3 = Mock()
+            mock_message3.tool_calls = None
+            mock_message3.content = "Final answer"
+
+            third_response = Mock()
+            third_response.choices = [Mock(message=mock_message3)]
+
+            call_count = 0
+
+            def mock_create(**kwargs):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    # Initial request
+                    return first_response
+                elif call_count == 2:
+                    # First streaming attempt
+                    return iter([mock_stream_chunk])
+                elif call_count == 3:
+                    # After fallback, non-streaming
+                    return second_response
+                elif call_count == 4:
+                    # Second streaming attempt
+                    # Return stream with final answer (no tool calls)
+                    chunk = Mock()
+                    chunk.choices = [
+                        Mock(delta=Mock(tool_calls=None, content="Final answer"))
+                    ]
+                    return iter([chunk])
+
+            mock_client.chat.completions.create = mock_create
+
+            # Setup tools
+            llm = LLM(enable_tools=True, continuous=False)
+
+            def tool_func(arg: str):
+                return f"Result: {arg}"
+
+            for tool_name in ["tool1", "tool2"]:
+                llm.add_tool(
+                    ToolFunction(
+                        name=tool_name,
+                        description=f"Test {tool_name}",
+                        parameters=[
+                            ToolParameter(
+                                name="arg", type="string", description="Test arg"
+                            )
+                        ],
+                        function=tool_func,
+                    )
+                )
+
+            # Should handle recursive tools with streaming for final response
+            result = llm.prompt("Test", stream_final_response=True)
+
+            # Should return a generator (from the second streaming attempt)
+            assert hasattr(result, "__iter__")
+            chunks = list(result)
+            assert "".join(chunks) == "Final answer"
+
+    def test_stream_final_response_with_continuous_mode(self):
+        """Test streaming final response maintains conversation history."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            mock_client = mock_openai.return_value
+
+            # First response: tool call
+            mock_tool_call = Mock()
+            mock_tool_call.id = "call_123"
+            mock_tool_call.function.name = "test_tool"
+            mock_tool_call.function.arguments = '{"arg": "value"}'
+
+            mock_message = Mock()
+            mock_message.tool_calls = [mock_tool_call]
+            mock_message.content = None
+
+            first_response = Mock()
+            first_response.choices = [Mock(message=mock_message)]
+
+            # Streaming follow-up
+            mock_chunk = Mock()
+            mock_chunk.choices = [Mock(delta=Mock(content="Streamed", tool_calls=None))]
+
+            mock_stream = iter([mock_chunk])
+
+            call_count = 0
+
+            def mock_create(**kwargs):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    return first_response
+                else:
+                    return mock_stream
+
+            mock_client.chat.completions.create = mock_create
+
+            # Setup tool
+            llm = LLM(enable_tools=True, continuous=True)
+
+            def test_func(arg: str):
+                return "Tool result"
+
+            llm.add_tool(
+                ToolFunction(
+                    name="test_tool",
+                    description="Test tool",
+                    parameters=[
+                        ToolParameter(name="arg", type="string", description="Test arg")
+                    ],
+                    function=test_func,
+                )
+            )
+
+            # Execute with streaming
+            result = llm.prompt("Test", stream_final_response=True)
+            chunks = list(result)
+
+            # Check conversation history was updated
+            assert len(llm.messages) > 0
+            # Last message should be the assistant's response
+            assert llm.messages[-1]["role"] == "assistant"
+            assert llm.messages[-1]["content"] == "Streamed"
