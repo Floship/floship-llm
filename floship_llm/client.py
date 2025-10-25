@@ -229,24 +229,47 @@ class LLM:
         Build parameters for completion request according to Heroku Inference API spec.
         
         See: https://devcenter.heroku.com/articles/heroku-inference-api-v1-chat-completions
+        
+        Note: Claude models don't allow both temperature and top_p simultaneously.
+        Note: When extended_thinking is enabled, temperature must be set to 1.
         """
         params = {
             "model": self.model,
-            "temperature": self.temperature,
         }
+        
+        # Heroku-specific parameters that need to go in extra_body for OpenAI client
+        extra_body = {}
+        
+        # Check if extended thinking is enabled
+        has_extended_thinking = self.extended_thinking is not None and (
+            (isinstance(self.extended_thinking, dict) and self.extended_thinking.get('enabled', False)) or
+            (isinstance(self.extended_thinking, bool) and self.extended_thinking)
+        )
+        
+        # Add temperature or top_p (not both for Claude)
+        if has_extended_thinking:
+            # Extended thinking requires temperature = 1
+            params["temperature"] = 1.0
+        elif self.top_p is not None:
+            # If top_p is set, use it instead of temperature
+            extra_body['top_p'] = self.top_p
+        else:
+            # Otherwise use temperature
+            params["temperature"] = self.temperature
         
         # Add Heroku-supported optional parameters
         if self.max_completion_tokens is not None:
             params['max_completion_tokens'] = self.max_completion_tokens
         
         if self.top_k is not None:
-            params['top_k'] = self.top_k
-        
-        if self.top_p is not None:
-            params['top_p'] = self.top_p
+            extra_body['top_k'] = self.top_k
         
         if self.extended_thinking is not None:
-            params['extended_thinking'] = self.extended_thinking
+            extra_body['extended_thinking'] = self.extended_thinking
+        
+        # Add extra_body if it has content
+        if extra_body:
+            params['extra_body'] = extra_body
         
         # Legacy parameters (not recommended, Heroku ignores these)
         # Only include if allow_ignored_params is True (internal flag, not sent to API)

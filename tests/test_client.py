@@ -260,12 +260,15 @@ class TestLLM:
             )
             params = llm.get_request_params()
             
+            # When top_p is set, temperature is not included (mutual exclusivity with Claude)
+            # Heroku-specific params (top_k, top_p) are wrapped in extra_body
             expected = {
                 'model': 'test-model',
-                'temperature': 0.7,
                 'max_completion_tokens': 2000,
-                'top_k': 50,
-                'top_p': 0.9
+                'extra_body': {
+                    'top_k': 50,
+                    'top_p': 0.9
+                }
             }
             assert params == expected
 
@@ -283,10 +286,14 @@ class TestLLM:
             )
             params = llm.get_request_params()
             
+            # When extended_thinking is enabled, temperature is forced to 1.0
+            # extended_thinking goes in extra_body
             expected = {
                 'model': 'test-model',
-                'temperature': 0.7,
-                'extended_thinking': extended_thinking_config
+                'temperature': 1.0,
+                'extra_body': {
+                    'extended_thinking': extended_thinking_config
+                }
             }
             assert params == expected
 
