@@ -48,8 +48,8 @@ def get_current_date():
 def calculate(expression: str):
     """Evaluate a mathematical expression."""
     try:
-        # Safe eval for basic math
-        result = eval(
+        # Safe eval for basic math (restricted builtins for example purposes)
+        result = eval(  # nosec B307 - restricted eval for math demo
             expression, {"__builtins__": {}}, {"abs": abs, "round": round, "pow": pow}
         )
         return str(result)

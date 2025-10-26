@@ -77,11 +77,40 @@ repos:
         name: 🔍 Lint with flake8
         args: [
           '--max-line-length=120',
-          '--extend-ignore=E203,W503,E501,D,F401,F841,E722,E402,F541',
+          '--extend-ignore=E203,W503,E501',  # More strict: removed D, F401, F841, E722, E402, F541
+          '--max-complexity=10',
+          '--per-file-ignores=__init__.py:F401,tests/*:F401,F841',
+        ]
+        additional_dependencies: [
+          'flake8-bugbear',        # Find likely bugs and design problems
+          'flake8-comprehensions',  # Better list/dict comprehensions
+          'flake8-simplify',        # Simplify code suggestions
         ]
 
-  # Type checking with mypy - disabled for now, too strict for this codebase
-  # Uncomment to enable strict type checking
+  # Security scanning with bandit
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.8.0
+    hooks:
+      - id: bandit
+        name: 🛡️  Security scan with bandit
+        args: ['-c', 'pyproject.toml']
+        additional_dependencies: ['bandit[toml]']
+        exclude: ^tests/
+
+  # Docstring checking with pydocstyle
+  - repo: https://github.com/PyCQA/pydocstyle
+    rev: 6.3.0
+    hooks:
+      - id: pydocstyle
+        name: 📖 Check docstrings with pydocstyle
+        args: [
+          '--convention=google',
+          '--add-ignore=D100,D104,D105,D107,D212',  # Added D212
+        ]
+        exclude: ^(tests/|examples)
+
+  # Type checking with mypy (optional - requires type annotations)
+  # Uncomment to enable strict type checking:
   # - repo: https://github.com/pre-commit/mirrors-mypy
   #   rev: v1.18.2
   #   hooks:
@@ -89,22 +118,51 @@ repos:
   #       name: 🔍 Type check with mypy
   #       args: [
   #         '--ignore-missing-imports',
-  #         '--no-strict-optional',
   #         '--allow-untyped-defs',
   #         '--allow-incomplete-defs',
+  #         '--no-warn-unused-ignores',
   #       ]
   #       additional_dependencies: [
   #         types-requests,
   #         pydantic,
+  #         openai,
   #       ]
   #       exclude: ^(tests/|examples|test_retry)
+
+  # Code quality with pylint (more strict)
+  - repo: https://github.com/PyCQA/pylint
+    rev: v3.3.3
+    hooks:
+      - id: pylint
+        name: 🔬 Analyze with pylint
+        args: [
+          '--max-line-length=120',
+          '--disable=C0103,C0114,C0115,C0116,R0913,R0903,R0902,W0212,W0621,W0613,W1203,W0718,W0123',
+          '--good-names=i,j,k,x,y,z,id,tc,llm,_',
+          '--min-similarity-lines=10',
+          '--max-args=10',
+        ]
+        exclude: ^(tests/|examples)
+
+  # Dead code detection (optional - may flag public API methods)
+  # Uncomment to enable:
+  # - repo: https://github.com/asottile/dead
+  #   rev: v1.5.2
+  #   hooks:
+  #     - id: dead
+  #       name: 💀 Check for dead code
+  #       exclude: ^(tests/|examples)
 
   # Check requirements.txt
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
       - id: requirements-txt-fixer
-        name: 📋 Fix requirements.txt
+        name: � Fix requirements.txt
+
+# Note: Safety check for dependencies is better run separately:
+# pip install safety
+# safety check --json
 
 # Configuration for detect-secrets
 # Run once: detect-secrets scan > .secrets.baseline

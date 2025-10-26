@@ -37,6 +37,14 @@ dev = [
     "black>=23.0.0",
     "mypy>=1.0.0",
     "coverage[toml]>=7.0.0",
+    "flake8>=7.0.0",
+    "flake8-bugbear>=23.0.0",
+    "flake8-comprehensions>=3.14.0",
+    "flake8-simplify>=0.21.0",
+    "bandit[toml]>=1.7.0",
+    "pylint>=3.0.0",
+    "pydocstyle>=6.3.0",
+    "safety>=3.0.0",
 ]
 
 [project.urls]
@@ -121,3 +129,34 @@ exclude = [
     "test_retry.py",
     "test_retry_scenarios.py",
 ]
+
+[tool.bandit]
+exclude_dirs = [
+    "tests",
+    "examples",
+]
+skips = [
+    "B101",  # assert_used - we use asserts in tests
+    "B601",  # paramiko_calls - not using paramiko
+]
+
+[tool.pylint.messages_control]
+max-line-length = 120
+disable = [
+    "C0103",  # invalid-name
+    "C0114",  # missing-module-docstring
+    "C0115",  # missing-class-docstring
+    "C0116",  # missing-function-docstring
+    "R0913",  # too-many-arguments
+    "R0903",  # too-few-public-methods
+    "R0902",  # too-many-instance-attributes
+    "W0212",  # protected-access
+    "W0621",  # redefined-outer-name
+    "W0613",  # unused-argument
+    "W1203",  # logging-fstring-interpolation
+]
+good-names = ["i", "j", "k", "x", "y", "z", "id", "tc", "llm", "_"]
+
+[tool.pydocstyle]
+convention = "google"
+add-ignore = ["D100", "D104", "D105", "D107"]
