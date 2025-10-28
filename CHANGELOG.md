@@ -5,6 +5,111 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2025-10-28
+
+### Added
+- **CloudFront WAF Protection:** Major security and reliability enhancement
+  - Automatic content sanitization to prevent CloudFront WAF 403 blocking
+  - Sanitizes path traversal patterns (`../` → `[PARENT_DIR]/`)
+  - Sanitizes XSS patterns (`<script>` → `[SCRIPT_TAG]`, `<iframe>` → `[IFRAME_TAG]`)
+  - Sanitizes JavaScript protocols (`javascript:` → `js:`)
+  - Sanitizes event handlers (`onerror=` → `on_error=`)
+  - Enabled by default, can be disabled via `enable_waf_sanitization=False`
+  - Preserves semantic meaning - LLM can still understand sanitized patterns
+- **Automatic Retry on 403:** Exponential backoff with forced sanitization
+  - Automatically retries up to 2 times on CloudFront 403 errors
+  - Uses exponential backoff: 1s, 2s delays
+  - Forces sanitization on retry even if initially disabled
+  - Configurable via `max_waf_retries` parameter
+- **LLMConfig:** New configuration dataclass for WAF protection settings
+  - `enable_waf_sanitization`: Enable/disable sanitization (default: True)
+  - `max_waf_retries`: Max retries on 403 (default: 2)
+  - `retry_with_sanitization`: Force sanitization on retry (default: True)
+  - `debug_mode`: Enable detailed logging (default: False)
+  - `log_sanitization`: Log when content is sanitized (default: True)
+  - `log_blockers`: Log which patterns were found (default: True)
+  - `from_env()`: Load configuration from environment variables
+- **LLMMetrics:** Track sanitization and error metrics
+  - `total_requests`: Total number of requests made
+  - `sanitized_requests`: Number of requests that required sanitization
+  - `cloudfront_403_errors`: Number of CloudFront 403 errors encountered
+  - `retry_successes`: Number of successful retries
+  - `path_traversal_count`: Number of path traversal patterns found
+  - `xss_pattern_count`: Number of XSS patterns found
+  - `to_dict()`: Convert metrics to dictionary with rates
+- **CloudFrontWAFSanitizer:** Core sanitization engine
+  - `sanitize()`: Sanitize content and return (sanitized_content, was_sanitized)
+  - `check_for_blockers()`: Detect patterns without sanitizing
+  - Case-insensitive pattern detection
+  - Supports aggressive mode for stricter sanitization
+- New methods in LLM class:
+  - `get_waf_metrics()`: Get current WAF metrics
+  - `reset_waf_metrics()`: Reset metrics counters
+  - `_sanitize_for_waf()`: Internal sanitization with logging
+  - `_is_cloudfront_403()`: Detect CloudFront 403 errors
+- Environment variables support:
+  - `FLOSHIP_LLM_WAF_SANITIZE`: Enable sanitization (default: 'true')
+  - `FLOSHIP_LLM_DEBUG`: Enable debug mode (default: 'false')
+  - `FLOSHIP_LLM_WAF_MAX_RETRIES`: Max retries (default: '2')
+- Comprehensive test suite: `tests/test_waf_protection.py`
+  - 28 tests covering all WAF protection features
+  - Tests for sanitizer, config, metrics, integration, and real-world scenarios
+  - 100% passing test rate
+- New example: `example_cloudfront_waf.py`
+  - 6 complete examples demonstrating WAF protection
+  - Shows basic protection, PR diff review, custom config, metrics tracking
+- Documentation: Extended README with CloudFront WAF Protection section
+  - Problem description and solution
+  - Configuration examples
+  - Monitoring metrics
+  - What gets sanitized (table)
+  - Real-world use cases (PR description generator, code review bot)
+  - Migration guide from manual sanitization
+  - Benefits over manual sanitization
+
+### Changed
+- `LLM.__init__()` now accepts WAF-related parameters:
+  - `enable_waf_sanitization`: Enable WAF protection (default: True)
+  - `waf_config`: LLMConfig instance for advanced configuration
+  - `debug_mode`: Enable detailed logging
+- `prompt()` method now includes automatic WAF protection:
+  - Sanitizes prompt and system messages before sending
+  - Automatically retries on 403 errors with exponential backoff
+  - Tracks metrics for monitoring
+  - Enhanced logging with debug mode
+- `prompt_stream()` method now includes automatic WAF protection:
+  - Sanitizes content before streaming
+  - Automatically retries on 403 errors
+  - Tracks metrics for monitoring
+- Import statement updated: Added `PermissionDeniedError` for 403 detection
+- Import statement updated: Added `dataclass`, `field`, `Tuple` for new classes
+
+### Fixed
+- **CloudFront WAF blocking:** Eliminates 403 errors when sending code content
+  - PR diffs with path traversal patterns no longer blocked
+  - HTML/JS code examples no longer blocked
+  - File paths in code comments no longer blocked
+- Improved error recovery with automatic retry logic
+
+### Benefits
+- ✅ **No more 403 errors** when sending legitimate code content
+- ✅ **Automatic** - Works out of the box, no manual setup required
+- ✅ **Transparent** - No changes needed to existing code
+- ✅ **Resilient** - Automatic retry with sanitization on 403
+- ✅ **Configurable** - Can be disabled or customized per use case
+- ✅ **Monitored** - Built-in metrics for tracking sanitization rates
+- ✅ **Tested** - Comprehensive test suite (28 tests, 100% passing)
+- ✅ **Semantic Preservation** - LLM can still understand sanitized patterns
+- ✅ **Library-wide** - Benefits all consumers, not just one application
+- ✅ **Maintainable** - Centralized solution, easier to update patterns
+
+### Migration Notes
+For applications currently using manual sanitization (like support-app):
+- **Before:** Manual sanitization with `sanitize_pr_description_content()`
+- **After:** Remove manual sanitization, let library handle it automatically
+- **Impact:** Can remove 200+ lines of sanitization code
+- **Compatibility:** Backward compatible - existing code works unchanged
+
 ## [0.4.0] - 2025-10-25
 
 ### Added

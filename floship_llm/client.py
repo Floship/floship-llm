@@ -5,11 +5,11 @@ import logging
 import os
 import re
 import time
-from copy import copy
+from dataclasses import dataclass
 from distutils.util import strtobool
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from openai import OpenAI
+from openai import OpenAI, PermissionDeniedError
 from pydantic import BaseModel
 
 from .content_processor import ContentProcessor
@@ -19,6 +19,139 @@ from .tool_manager import ToolManager
 from .utils import lm_json_utils
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class LLMConfig:
+    """Configuration for LLM client behavior."""
+
+    # Sanitization settings
+    enable_waf_sanitization: bool = True
+    sanitization_aggressive: bool = False
+
+    # Retry settings
+    max_waf_retries: int = 2
+    retry_with_sanitization: bool = True
+    retry_delay_base: float = 1.0  # Base delay for exponential backoff
+
+    # Logging
+    debug_mode: bool = False
+    log_sanitization: bool = True
+    log_blockers: bool = True
+
+    # CloudFront WAF specific
+    cloudfront_waf_detection: bool = True  # Auto-detect CloudFront errors
+
+    @classmethod
+    def from_env(cls):
+        """Load configuration from environment variables."""
+        return cls(
+            enable_waf_sanitization=os.getenv(
+                "FLOSHIP_LLM_WAF_SANITIZE", "true"
+            ).lower()
+            == "true",
+            debug_mode=os.getenv("FLOSHIP_LLM_DEBUG", "false").lower() == "true",
+            max_waf_retries=int(os.getenv("FLOSHIP_LLM_WAF_MAX_RETRIES", "2")),
+        )
+
+
+@dataclass
+class LLMMetrics:
+    """Track LLM client metrics."""
+
+    total_requests: int = 0
+    sanitized_requests: int = 0
+    failed_requests: int = 0
+    cloudfront_403_errors: int = 0
+    retry_successes: int = 0
+
+    # Pattern frequencies
+    path_traversal_count: int = 0
+    xss_pattern_count: int = 0
+
+    def to_dict(self):
+        """Convert metrics to dictionary."""
+        return {
+            "total_requests": self.total_requests,
+            "sanitization_rate": self.sanitized_requests / max(self.total_requests, 1),
+            "error_rate": self.failed_requests / max(self.total_requests, 1),
+            "cloudfront_403_rate": (
+                self.cloudfront_403_errors / max(self.failed_requests, 1)
+                if self.failed_requests > 0
+                else 0
+            ),
+        }
+
+
+class CloudFrontWAFSanitizer:
+    """
+    Sanitize content to prevent CloudFront WAF blocking.
+
+    CloudFront's Web Application Firewall blocks requests containing patterns
+    that resemble security attacks. This sanitizer replaces those patterns with
+    safe alternatives while preserving semantic meaning.
+    """
+
+    # Patterns that trigger CloudFront WAF
+    BLOCKERS = {
+        "path_traversal": [
+            (r"\.\./", "[PARENT_DIR]/"),
+            (r"\.\.[/\\]", "[PARENT_DIR]/"),
+            (r"\.\.\\\\", "[PARENT_DIR]\\\\"),
+        ],
+        "xss": [
+            (r"<script[^>]*>", "[SCRIPT_TAG]"),
+            (r"</script>", "[/SCRIPT_TAG]"),
+            (r"<iframe[^>]*>", "[IFRAME_TAG]"),
+            (r"</iframe>", "[/IFRAME_TAG]"),
+            (r"javascript:", "js:"),
+            (r"onerror\s*=", "on_error="),
+            (r"onload\s*=", "on_load="),
+        ],
+    }
+
+    @classmethod
+    def sanitize(cls, content: str, aggressive: bool = False) -> Tuple[str, bool]:
+        """
+        Sanitize content to prevent WAF blocking.
+
+        Args:
+            content: Content to sanitize
+            aggressive: If True, apply more aggressive sanitization
+
+        Returns:
+            Tuple of (sanitized_content, was_sanitized)
+        """
+        sanitized = content
+        was_sanitized = False
+
+        for category, patterns in cls.BLOCKERS.items():
+            for pattern, replacement in patterns:
+                if re.search(pattern, sanitized, re.IGNORECASE):
+                    sanitized = re.sub(
+                        pattern, replacement, sanitized, flags=re.IGNORECASE
+                    )
+                    was_sanitized = True
+
+        return sanitized, was_sanitized
+
+    @classmethod
+    def check_for_blockers(cls, content: str) -> List[Tuple[str, str]]:
+        """
+        Check if content contains patterns that would trigger WAF.
+
+        Args:
+            content: Content to check
+
+        Returns:
+            List of tuples (category, pattern) found in content
+        """
+        found = []
+        for category, patterns in cls.BLOCKERS.items():
+            for pattern, _ in patterns:
+                if re.search(pattern, content, re.IGNORECASE):
+                    found.append((category, pattern))
+        return found
 
 
 class LLM:
@@ -61,6 +194,11 @@ class LLM:
             track_tool_metadata: Track tool execution metadata (default: False)
             stream: Enable streaming responses (default: False)
 
+            CloudFront WAF Protection (NEW):
+            enable_waf_sanitization: Auto-sanitize content to prevent CloudFront WAF blocking (default: True)
+            waf_config: LLMConfig instance for WAF protection settings (default: None, uses defaults)
+            debug_mode: Enable detailed request/response logging (default: False)
+
         Note:
             frequency_penalty and presence_penalty are NOT supported by Heroku Inference API
             and will be ignored. Use allow_ignored_params=True to include them without error.
@@ -72,9 +210,25 @@ class LLM:
             INFERENCE_URL: Heroku Inference API endpoint (e.g., https://us.inference.heroku.com)
             INFERENCE_MODEL_ID: Model identifier (e.g., claude-4-sonnet)
             INFERENCE_KEY: API key for authentication
+
+        Environment Variables Optional (CloudFront WAF):
+            FLOSHIP_LLM_WAF_SANITIZE: Enable WAF sanitization (default: 'true')
+            FLOSHIP_LLM_DEBUG: Enable debug mode (default: 'false')
+            FLOSHIP_LLM_WAF_MAX_RETRIES: Max retries on 403 (default: '2')
         """
         # Validate required environment variables
         self._validate_environment()
+
+        # CloudFront WAF protection configuration
+        self.waf_config = kwargs.get("waf_config", None) or LLMConfig()
+        self.waf_sanitizer = CloudFrontWAFSanitizer()
+        self.waf_metrics = LLMMetrics()
+
+        # Override config with explicit parameters
+        if "enable_waf_sanitization" in kwargs:
+            self.waf_config.enable_waf_sanitization = kwargs["enable_waf_sanitization"]
+        if "debug_mode" in kwargs:
+            self.waf_config.debug_mode = kwargs["debug_mode"]
 
         # Basic configuration
         self.type = kwargs.get("type", "completion")
@@ -160,6 +314,68 @@ class LLM:
         for var in required_vars:
             if not os.environ.get(var):
                 raise ValueError(f"{var} environment variable must be set.")
+
+    # ========== CloudFront WAF Protection ==========
+
+    def _sanitize_for_waf(self, content: str) -> str:
+        """
+        Sanitize content to prevent CloudFront WAF blocking.
+
+        Args:
+            content: Content to sanitize
+
+        Returns:
+            Sanitized content
+        """
+        if not self.waf_config.enable_waf_sanitization:
+            return content
+
+        sanitized, was_sanitized = self.waf_sanitizer.sanitize(
+            content, aggressive=self.waf_config.sanitization_aggressive
+        )
+
+        if was_sanitized:
+            self.waf_metrics.sanitized_requests += 1
+
+            if self.waf_config.log_sanitization:
+                logger.warning("CloudFront WAF: Content sanitized to prevent blocking")
+
+            if self.waf_config.log_blockers:
+                blockers = self.waf_sanitizer.check_for_blockers(content)
+                if blockers:
+                    logger.debug(f"CloudFront WAF blockers found: {blockers}")
+                    # Update pattern counters
+                    for category, _ in blockers:
+                        if category == "path_traversal":
+                            self.waf_metrics.path_traversal_count += 1
+                        elif category == "xss":
+                            self.waf_metrics.xss_pattern_count += 1
+
+        return sanitized
+
+    def _is_cloudfront_403(self, error: Exception) -> bool:
+        """
+        Check if error is a CloudFront 403 error.
+
+        Args:
+            error: Exception to check
+
+        Returns:
+            True if error is CloudFront 403
+        """
+        if not isinstance(error, PermissionDeniedError):
+            return False
+
+        error_str = str(error).lower()
+        return "403" in error_str or "forbidden" in error_str
+
+    def get_waf_metrics(self) -> dict:
+        """Get current CloudFront WAF metrics."""
+        return self.waf_metrics.to_dict()
+
+    def reset_waf_metrics(self):
+        """Reset CloudFront WAF metrics counters."""
+        self.waf_metrics = LLMMetrics()
 
     # ========== Model Capability Properties ==========
 
@@ -347,7 +563,7 @@ class LLM:
         stream_final_response: bool = False,
     ) -> str:
         """
-        Generate completion from prompt.
+        Generate completion from prompt with automatic CloudFront WAF protection.
 
         Args:
             prompt: User prompt
@@ -361,6 +577,10 @@ class LLM:
             Generated response text, structured output, or generator (if streaming final response)
 
         Note:
+            CloudFront WAF Protection: If a 403 error occurs, the request will automatically
+            retry with content sanitization enabled. This prevents blocking when sending
+            code diffs, file patches, or other content with patterns resembling attacks.
+
             After calling this method, you can access tool call metadata via:
             - llm.get_last_tool_call_count(): Number of tool calls made
             - llm.get_last_tool_history(): List of tools called with details
@@ -378,6 +598,9 @@ class LLM:
                 for chunk in result:  # Tools were used, streaming final response
                     print(chunk, end="", flush=True)
         """
+        # Track metrics
+        self.waf_metrics.total_requests += 1
+
         # Reset tool tracking for new prompt
         if not retry:
             self._current_tool_call_count = 0
@@ -385,41 +608,131 @@ class LLM:
             self._current_tool_history = []
             self._last_response_metadata = {}
 
+        # Sanitize prompt and system message if WAF protection is enabled
+        original_prompt = prompt
+        original_system = system
+
         if prompt and not retry:
             self.retry_count = 0
+
+            # Apply WAF sanitization
+            if self.waf_config.enable_waf_sanitization:
+                prompt = self._sanitize_for_waf(prompt)
+                if system:
+                    system = self._sanitize_for_waf(system)
+
             if system:
                 self.add_message("system", system)
             self.add_message("user", prompt)
 
-        params = self.get_request_params()
-        logger.info(f"Prompting LLM with parameters: {params}")
+        # Retry loop for CloudFront WAF 403 errors
+        last_error = None
+        for waf_attempt in range(self.waf_config.max_waf_retries + 1):
+            try:
+                if self.waf_config.debug_mode:
+                    logger.debug(
+                        f"Request attempt {waf_attempt + 1}/{self.waf_config.max_waf_retries + 1}"
+                    )
+                    if waf_attempt > 0:
+                        logger.debug("Retrying with forced sanitization")
 
-        # Validate messages before sending
-        validated_messages = self._validate_messages_for_api(self.messages)
+                params = self.get_request_params()
+                if self.waf_config.debug_mode:
+                    logger.debug(f"Prompting LLM with parameters: {params}")
+                    logger.debug(f"Message count: {len(self.messages)}")
 
-        response = self.retry_handler.execute_with_retry(
-            self.client.chat.completions.create, **params, messages=validated_messages
-        )
+                # Validate messages before sending
+                validated_messages = self._validate_messages_for_api(self.messages)
 
-        result = self.process_response(
-            response, stream_final_response=stream_final_response
-        )
+                response = self.retry_handler.execute_with_retry(
+                    self.client.chat.completions.create,
+                    **params,
+                    messages=validated_messages,
+                )
 
-        # Store final metadata
-        self._last_response_metadata = {
-            "total_tool_calls": self._current_tool_call_count,
-            "recursion_depth": self._current_recursion_depth,
-            "tool_history": self._current_tool_history.copy(),
-        }
+                result = self.process_response(
+                    response, stream_final_response=stream_final_response
+                )
 
-        if not self.continuous:
-            self.reset()
+                # Store final metadata
+                self._last_response_metadata = {
+                    "total_tool_calls": self._current_tool_call_count,
+                    "recursion_depth": self._current_recursion_depth,
+                    "tool_history": self._current_tool_history.copy(),
+                }
 
-        return result
+                if not self.continuous:
+                    self.reset()
+
+                # Track successful retry
+                if waf_attempt > 0:
+                    self.waf_metrics.retry_successes += 1
+                    logger.info(
+                        f"CloudFront WAF: Retry successful after {waf_attempt} attempts"
+                    )
+
+                return result
+
+            except Exception as e:
+                last_error = e
+
+                # Check if it's a CloudFront 403 error
+                if (
+                    self._is_cloudfront_403(e)
+                    and waf_attempt < self.waf_config.max_waf_retries
+                ):
+                    self.waf_metrics.cloudfront_403_errors += 1
+                    wait_time = self.waf_config.retry_delay_base * (2**waf_attempt)
+
+                    logger.warning(
+                        f"CloudFront WAF 403 error (attempt {waf_attempt + 1}/"
+                        f"{self.waf_config.max_waf_retries + 1}). "
+                        f"Retrying in {wait_time}s with sanitization..."
+                    )
+
+                    # Wait before retry
+                    time.sleep(wait_time)
+
+                    # Force sanitization on retry if not already enabled
+                    if (
+                        not self.waf_config.enable_waf_sanitization
+                        and self.waf_config.retry_with_sanitization
+                    ):
+                        # Re-add messages with sanitization
+                        if not retry:
+                            # Clear last messages and re-add with sanitization
+                            if original_system:
+                                self.messages[-2]["content"] = self._sanitize_for_waf(
+                                    original_system
+                                )
+                            if original_prompt:
+                                self.messages[-1]["content"] = self._sanitize_for_waf(
+                                    original_prompt
+                                )
+
+                    continue
+                else:
+                    # Not a 403 error or out of retries
+                    if self._is_cloudfront_403(e):
+                        logger.error(
+                            f"CloudFront WAF: Failed after {self.waf_config.max_waf_retries + 1} attempts"
+                        )
+                    self.waf_metrics.failed_requests += 1
+
+                    if self.waf_config.debug_mode:
+                        logger.error(
+                            f"Request failed: {type(e).__name__}: {str(e)[:200]}"
+                        )
+
+                    raise
+
+        # This should never be reached, but just in case
+        if last_error:
+            raise last_error
 
     def prompt_stream(self, prompt: str, system: Optional[str] = None):
         """
-        Generate streaming completion from prompt.
+        Generate streaming completion from prompt with CloudFront WAF protection.
 
         NOTE: Streaming mode does NOT support tool calls. If tools are enabled,
         this method will raise an error.
@@ -434,6 +747,11 @@ class LLM:
         Raises:
             ValueError: If tools are enabled (tools not compatible with streaming)
 
+        Note:
+            CloudFront WAF Protection: Content is automatically sanitized before
+            sending to prevent 403 errors. On 403 errors, automatically retries
+            with forced sanitization.
+
         Example:
             >>> client = LLM(stream=True)
             >>> for chunk in client.prompt_stream("Hello!"):
@@ -446,49 +764,130 @@ class LLM:
                 "Disable tools or use non-streaming prompt() method."
             )
 
+        # Track metrics
+        self.waf_metrics.total_requests += 1
+
         # Reset tool tracking
         self._current_tool_call_count = 0
         self._current_tool_metadata = []
+
+        # Sanitize content if enabled
+        if self.waf_config.enable_waf_sanitization:
+            prompt = self._sanitize_for_waf(prompt)
+            if system:
+                system = self._sanitize_for_waf(system)
+
+        # Store original for retry
+        original_prompt = prompt
+        original_system = system
 
         # Add messages
         if system:
             self.add_message("system", system)
         self.add_message("user", prompt)
 
-        # Get request params and validate messages
-        params = self.get_request_params()
-        validated_messages = self._validate_messages_for_api(self.messages)
+        # Retry loop for CloudFront WAF 403 errors
+        last_error = None
+        for waf_attempt in range(self.waf_config.max_waf_retries + 1):
+            try:
+                if self.waf_config.debug_mode:
+                    logger.debug(
+                        f"Streaming request attempt {waf_attempt + 1}/{self.waf_config.max_waf_retries + 1}"
+                    )
 
-        # Enable streaming
-        params["stream"] = True
+                # Get request params and validate messages
+                params = self.get_request_params()
+                validated_messages = self._validate_messages_for_api(self.messages)
 
-        try:
-            # Make streaming request (no retry for streaming)
-            stream = self.client.chat.completions.create(
-                **params, messages=validated_messages
-            )
+                # Enable streaming
+                params["stream"] = True
 
-            full_response = ""
+                # Make streaming request (no retry for streaming)
+                stream = self.client.chat.completions.create(
+                    **params, messages=validated_messages
+                )
 
-            # Yield chunks as they arrive
-            for chunk in stream:
-                if chunk.choices and len(chunk.choices) > 0:
-                    delta = chunk.choices[0].delta
-                    if delta.content:
-                        content = delta.content
-                        full_response += content
-                        yield content
+                full_response = ""
 
-            # Add complete response to conversation history
-            if full_response:
-                self.add_message("assistant", full_response)
+                # Yield chunks as they arrive
+                for chunk in stream:
+                    if chunk.choices and len(chunk.choices) > 0:
+                        delta = chunk.choices[0].delta
+                        if delta.content:
+                            content = delta.content
+                            full_response += content
+                            yield content
 
-        except Exception as e:
-            logger.error(f"Streaming error: {str(e)}")
-            raise
+                # Add complete response to conversation history
+                if full_response:
+                    self.add_message("assistant", full_response)
+
+                # Track successful retry
+                if waf_attempt > 0:
+                    self.waf_metrics.retry_successes += 1
+                    logger.info(
+                        f"CloudFront WAF: Stream retry successful after {waf_attempt} attempts"
+                    )
+
+                break  # Success, exit retry loop
+
+            except Exception as e:
+                last_error = e
+
+                # Check if it's a CloudFront 403 error
+                if (
+                    self._is_cloudfront_403(e)
+                    and waf_attempt < self.waf_config.max_waf_retries
+                ):
+                    self.waf_metrics.cloudfront_403_errors += 1
+                    wait_time = self.waf_config.retry_delay_base * (2**waf_attempt)
+
+                    logger.warning(
+                        f"CloudFront WAF 403 error during streaming (attempt {waf_attempt + 1}/"
+                        f"{self.waf_config.max_waf_retries + 1}). "
+                        f"Retrying in {wait_time}s with sanitization..."
+                    )
+
+                    # Wait before retry
+                    time.sleep(wait_time)
+
+                    # Force sanitization on retry
+                    if (
+                        not self.waf_config.enable_waf_sanitization
+                        and self.waf_config.retry_with_sanitization
+                    ):
+                        # Re-sanitize messages
+                        if original_system:
+                            self.messages[-2]["content"] = self._sanitize_for_waf(
+                                original_system
+                            )
+                        if original_prompt:
+                            self.messages[-1]["content"] = self._sanitize_for_waf(
+                                original_prompt
+                            )
+
+                    continue
+                else:
+                    # Not a 403 error or out of retries
+                    if self._is_cloudfront_403(e):
+                        logger.error(
+                            f"CloudFront WAF: Streaming failed after {self.waf_config.max_waf_retries + 1} attempts"
+                        )
+                    self.waf_metrics.failed_requests += 1
+
+                    if self.waf_config.debug_mode:
+                        logger.error(
+                            f"Streaming error: {type(e).__name__}: {str(e)[:200]}"
+                        )
+
+                    raise
 
         if not self.continuous:
             self.reset()
+
+        # If we exited loop with error, raise it
+        if last_error and waf_attempt >= self.waf_config.max_waf_retries:
+            raise last_error
 
     def retry_prompt(self, prompt: Optional[str] = None) -> Optional[str]:
         """

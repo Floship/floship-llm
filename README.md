@@ -9,7 +9,9 @@ A reusable Python library for interacting with Heroku Managed Inference and Agen
 - 🔄 Support for continuous (multi-turn) conversations
 - 🛠️ **Tool/Function calling** - Let the LLM execute Python functions
 - 📊 **Tool call tracking** (v0.2.0+) - Monitor and budget tool usage with detailed metrics
-- 📈 Structured output with Pydantic schemas
+- �️ **CloudFront WAF Protection** (v0.5.0+) - Automatic content sanitization to prevent 403 errors
+- 🔁 **Automatic retry** - Exponential backoff for 403 errors with forced sanitization
+- �📈 Structured output with Pydantic schemas
 - 🎯 JSON response parsing and validation
 - ⚙️ Configurable parameters (temperature, top_k, top_p, etc.)
 - 🧠 **Extended thinking** support for Claude models (Heroku-specific)
@@ -254,9 +256,206 @@ llm = LLM(
     continuous=False
 )
 
+)
+
 response = llm.prompt("Generate 3 labels for a ticket about database optimization")
 # Returns a Labels object with validated structure
 print(response.labels)
+```
+
+## CloudFront WAF Protection
+
+**NEW in v0.5.0:** Built-in protection against CloudFront Web Application Firewall blocking.
+
+### The Problem
+
+When sending code content (PR diffs, file patches, error traces) to LLM APIs behind CloudFront WAF, requests may be blocked with `403 Forbidden` errors if they contain patterns resembling security attacks:
+
+- **Path traversal**: `../../config/settings.py`
+- **XSS patterns**: `<script>`, `<iframe>`, `javascript:`
+- **Event handlers**: `onerror=`, `onload=`
+
+### The Solution
+
+The library now **automatically sanitizes** content to prevent WAF blocking while preserving semantic meaning:
+
+```python
+from floship_llm import LLM
+
+# WAF protection is enabled by default
+llm = LLM()
+
+# Send PR diff containing suspicious patterns - no 403 error!
+pr_diff = """
+diff --git a/../../src/auth.py b/../../src/auth.py
+--- a/../../src/auth.py
++++ b/../../src/auth.py
+@@ -10,3 +10,3 @@
+-return '<script>alert("xss")</script>'
++return sanitize_html(content)
+"""
+
+response = llm.prompt(f"Review this security fix:\n{pr_diff}")
+# Content is automatically sanitized before sending
+# ../../ becomes [PARENT_DIR]/
+# <script> becomes [SCRIPT_TAG]
+```
+
+### Configuration
+
+```python
+from floship_llm import LLM, LLMConfig
+
+# Default: WAF protection enabled
+llm = LLM()
+
+# Disable if you know your content is safe
+llm = LLM(enable_waf_sanitization=False)
+
+# Custom configuration
+config = LLMConfig(
+    enable_waf_sanitization=True,
+    max_waf_retries=2,           # Retry on 403 errors
+    retry_with_sanitization=True, # Force sanitization on retry
+    debug_mode=False,            # Enable detailed logging
+    log_sanitization=True,       # Log when content is sanitized
+    log_blockers=True            # Log which patterns were found
+)
+llm = LLM(waf_config=config)
+
+# Environment variables (optional)
+import os
+os.environ['FLOSHIP_LLM_WAF_SANITIZE'] = 'true'
+os.environ['FLOSHIP_LLM_DEBUG'] = 'false'
+os.environ['FLOSHIP_LLM_WAF_MAX_RETRIES'] = '2'
+```
+
+### Automatic Retry on 403
+
+If a 403 error occurs (even with sanitization disabled), the library automatically retries with sanitization enabled:
+
+```python
+llm = LLM(enable_waf_sanitization=False)
+
+# First attempt: No sanitization
+# If 403 error: Automatically retries with sanitization
+# Uses exponential backoff: 1s, 2s delays
+response = llm.prompt("Content with ../../paths")
+```
+
+### Monitoring Metrics
+
+Track how often sanitization occurs and 403 errors happen:
+
+```python
+llm = LLM()
+
+# Make some requests
+llm.prompt("Check file ../../config/settings.py")
+llm.prompt("Normal content")
+
+# Get metrics
+metrics = llm.get_waf_metrics()
+print(f"Total requests: {metrics['total_requests']}")
+print(f"Sanitization rate: {metrics['sanitization_rate']:.1%}")
+print(f"403 error rate: {metrics['cloudfront_403_rate']:.1%}")
+
+# Reset metrics
+llm.reset_waf_metrics()
+```
+
+### What Gets Sanitized
+
+| Pattern Type | Original | Sanitized | Example |
+|--------------|----------|-----------|---------|
+| Path traversal | `../` | `[PARENT_DIR]/` | `../../config` → `[PARENT_DIR]/[PARENT_DIR]/config` |
+| Path traversal | `..\` | `[PARENT_DIR]\` | `..\..\config` → `[PARENT_DIR]\[PARENT_DIR]\config` |
+| XSS script tag | `<script>` | `[SCRIPT_TAG]` | `<script>alert(1)</script>` → `[SCRIPT_TAG]alert(1)[/SCRIPT_TAG]` |
+| XSS iframe | `<iframe>` | `[IFRAME_TAG]` | `<iframe src="x">` → `[IFRAME_TAG] src="x">` |
+| JS protocol | `javascript:` | `js:` | `href="javascript:void(0)"` → `href="js:void(0)"` |
+| Event handler | `onerror=` | `on_error=` | `<img onerror="x">` → `<img on_error="x">` |
+
+### Real-World Use Cases
+
+**1. PR Description Generator (support-app)**
+
+```python
+from floship_llm import LLM
+
+llm = LLM()  # WAF protection enabled by default
+
+# No need for manual sanitization anymore!
+pr_info = "File: ../../src/middleware/auth.js"
+commit_info = "Fixed: <script> tag injection vulnerability"
+file_changes = "+++ b/../../src/middleware/auth.js"
+
+# Previously required manual sanitization
+# Now handled automatically by the library
+response = llm.prompt(f"""
+Generate PR description:
+{pr_info}
+{commit_info}
+{file_changes}
+""")
+```
+
+**2. Code Review Bot**
+
+```python
+llm = LLM(debug_mode=True)  # Enable logging to monitor sanitization
+
+diff_content = """
+diff --git a/../../app/views/index.html b/../../app/views/index.html
+-<script>var config = {api: "../../api/config.json"};</script>
++<script>var config = {api: "/api/config.json"};</script>
+"""
+
+# Automatic protection against WAF blocking
+review = llm.prompt(f"Review this security fix:\n{diff_content}")
+```
+
+### Benefits Over Manual Sanitization
+
+✅ **Automatic** - Works out of the box, no setup required
+✅ **Transparent** - No changes needed to existing code
+✅ **Resilient** - Automatic retry with sanitization on 403
+✅ **Configurable** - Can be disabled or customized
+✅ **Monitored** - Built-in metrics for tracking
+✅ **Tested** - Comprehensive test suite (28 tests)
+✅ **Semantic Preservation** - LLM can still understand `[PARENT_DIR]/` as `../`
+
+### Migration from Manual Sanitization
+
+**Before (support-app pattern):**
+```python
+from llm.sanitization import sanitize_pr_description_content
+
+# Manual sanitization required
+sanitized_pr, sanitized_commits, sanitized_files, _, _ = (
+    sanitize_pr_description_content(pr_info, commit_info, file_changes, ticket)
+)
+prompt = f"{sanitized_pr}\n{sanitized_commits}\n{sanitized_files}"
+response = llm.prompt(prompt)
+```
+
+**After (with library WAF protection):**
+```python
+# Automatic sanitization - just use raw content!
+prompt = f"{pr_info}\n{commit_info}\n{file_changes}"
+response = llm.prompt(prompt)  # WAF protection handled automatically
+```
+
+**Benefits:**
+- Remove 200+ lines of sanitization code
+- Eliminate maintenance burden
+- Better error recovery with automatic retry
+- Works for all library consumers, not just one app
+
+### Tool/Function Calling
+
+Enable the LLM to execute Python functions during conversations:
+
+````
 ```
 
 ### Tool/Function Calling
