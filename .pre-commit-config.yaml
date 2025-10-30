@@ -175,7 +175,7 @@ repos:
         language: system
         files: ^pyproject\.toml$
         pass_filenames: false
-        stages: [commit]
+        stages: [pre-commit]
 
 # Note: Safety check for dependencies is better run separately:
 # pip install safety
