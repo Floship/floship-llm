@@ -164,6 +164,233 @@ else:
 
 **See also:** `example_stream_with_tools.py` for complete examples
 
+## Embeddings Support
+
+**NEW in v0.5.0:** Full support for Heroku Inference API `/v1/embeddings` endpoint.
+
+Generate vector embeddings for text using Heroku's managed embedding models. These embeddings are optimized for search, classification, clustering, and other ML tasks.
+
+### Basic Usage
+
+```python
+from floship_llm import LLM
+
+# Create an embeddings client
+llm = LLM(
+    type='embedding',
+    model='cohere-embed-multilingual'  # or your embedding model
+)
+
+# Generate embedding for a single text
+embedding = llm.embed("Hello, world!")
+print(f"Embedding dimension: {len(embedding)}")  # e.g., 1024
+print(f"First values: {embedding[:5]}")
+```
+
+### Batch Embeddings
+
+Process multiple texts in a single API call (up to 96 texts):
+
+```python
+# Generate embeddings for multiple texts
+texts = [
+    "Python is a programming language",
+    "JavaScript runs in browsers",
+    "Rust is memory-safe"
+]
+
+embeddings = llm.embed(texts)
+print(f"Generated {len(embeddings)} embeddings")
+# Returns: [[0.1, 0.2, ...], [0.3, 0.4, ...], [0.5, 0.6, ...]]
+```
+
+### Full Response with Metadata
+
+Get token usage and other metadata:
+
+```python
+response = llm.embed("Sample text", return_full_response=True)
+
+print(response['model'])  # Model used
+print(response['usage'])  # Token usage info
+print(response['data'])   # List of embedding objects
+
+# Access individual embeddings
+for item in response['data']:
+    print(f"Index {item['index']}: {len(item['embedding'])} dimensions")
+```
+
+### Input Types for Different Use Cases
+
+Optimize embeddings for specific tasks using the `input_type` parameter:
+
+#### 1. Search Documents (Indexing)
+
+```python
+# For documents you want to search through
+llm = LLM(
+    type='embedding',
+    model='cohere-embed-multilingual',
+    input_type='search_document'  # Optimized for document indexing
+)
+
+documents = [
+    "Paris is the capital of France.",
+    "Tokyo is the capital of Japan.",
+    "Berlin is the capital of Germany."
+]
+
+doc_embeddings = llm.embed(documents)
+# Use these embeddings in your vector database
+```
+
+#### 2. Search Queries
+
+```python
+# For search queries against document embeddings
+llm = LLM(
+    type='embedding',
+    model='cohere-embed-multilingual',
+    input_type='search_query'  # Optimized for queries
+)
+
+query = "What is the capital of France?"
+query_embedding = llm.embed(query)
+# Compare with document embeddings to find matches
+```
+
+#### 3. Classification
+
+```python
+# For training classifiers
+llm = LLM(
+    type='embedding',
+    model='cohere-embed-multilingual',
+    input_type='classification'
+)
+
+texts = [
+    "This product is amazing!",      # Positive
+    "Terrible experience.",           # Negative
+    "It's okay, nothing special."    # Neutral
+]
+
+embeddings = llm.embed(texts)
+# Use these embeddings to train a classifier
+```
+
+#### 4. Clustering
+
+```python
+# For grouping similar items
+llm = LLM(
+    type='embedding',
+    model='cohere-embed-multilingual',
+    input_type='clustering'
+)
+
+items = [
+    "Apple releases new iPhone",
+    "Google announces Android update",
+    "Stock market reaches new high",
+    "Economic indicators show growth"
+]
+
+embeddings = llm.embed(items)
+# Use these embeddings for clustering algorithms
+```
+
+### Encoding and Embedding Types
+
+Control the output format and precision:
+
+```python
+# Float embeddings (default)
+llm = LLM(
+    type='embedding',
+    encoding_format='float',  # or 'base64'
+    embedding_type='float'    # float, int8, uint8, binary, ubinary
+)
+
+# Base64 encoded for efficient transmission
+llm = LLM(
+    type='embedding',
+    encoding_format='base64',
+    embedding_type='int8'  # Smaller size, slight precision loss
+)
+
+embedding = llm.embed("Sample text")
+# Returns base64 string instead of array
+```
+
+### Practical Example: Similarity Search
+
+```python
+import numpy as np
+from floship_llm import LLM
+
+# Create clients for documents and queries
+doc_llm = LLM(type='embedding', input_type='search_document')
+query_llm = LLM(type='embedding', input_type='search_query')
+
+# Index documents
+documents = [
+    "Paris is the capital of France and known for the Eiffel Tower.",
+    "Tokyo is the capital of Japan and a major technology hub.",
+    "New York is a major city in the United States."
+]
+doc_embeddings = doc_llm.embed(documents)
+
+# Search with a query
+query = "What is the capital of France?"
+query_embedding = query_llm.embed(query)
+
+# Calculate cosine similarity
+def cosine_similarity(a, b):
+    return np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b))
+
+# Find best match
+similarities = [
+    (idx, cosine_similarity(query_embedding, doc_emb))
+    for idx, doc_emb in enumerate(doc_embeddings)
+]
+best_match = max(similarities, key=lambda x: x[1])
+print(f"Best match: {documents[best_match[0]]}")
+print(f"Similarity: {best_match[1]:.4f}")
+```
+
+### Embeddings API Reference
+
+**Constructor Parameters:**
+```python
+LLM(
+    type='embedding',                    # Required for embeddings
+    model='cohere-embed-multilingual',   # Embedding model ID
+    input_type=None,                     # 'search_document', 'search_query',
+                                         # 'classification', 'clustering'
+    encoding_format='float',             # 'float' or 'base64'
+    embedding_type='float',              # 'float', 'int8', 'uint8',
+                                         # 'binary', 'ubinary'
+    allow_ignored_params=False           # Ignore unsupported parameters
+)
+```
+
+**embed() Method:**
+```python
+embed(
+    input: Union[str, List[str]],       # Single text or list (max 96)
+    return_full_response: bool = False  # Return full API response with metadata
+) -> Union[List[float], List[List[float]], Dict]
+```
+
+**Limits and Recommendations:**
+- Maximum 96 strings per request
+- Maximum 2048 characters per string
+- Recommended: < 512 tokens per string for optimal performance
+- Strings exceeding limits will trigger warnings but may still work
+
+**See also:** `example_embeddings.py` for complete examples including similarity search
+
 ### Using Extended Thinking (Claude Models)
 
 Extended thinking allows Claude models to spend more time reasoning before responding. This is particularly useful for complex problems:

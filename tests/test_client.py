@@ -131,11 +131,11 @@ class TestLLM:
             ):
                 LLM(type="invalid")
 
-    def test_init_embedding_type_not_supported(self):
-        """Test LLM initialization with embedding type raises exception."""
+    def test_init_embedding_type_supported(self):
+        """Test LLM initialization with embedding type is now supported."""
         with patch("floship_llm.client.OpenAI"):
-            with pytest.raises(Exception, match="Embedding model is not supported yet"):
-                LLM(type="embedding")
+            llm = LLM(type="embedding")
+            assert llm.type == "embedding"
 
     def test_init_invalid_response_format(self):
         """Test LLM initialization with invalid response format."""
@@ -362,10 +362,10 @@ class TestLLM:
         with patch("floship_llm.client.OpenAI"):
             llm = LLM()
 
-            with pytest.raises(ValueError, match="Text cannot be empty for embedding"):
+            with pytest.raises(ValueError, match="Input cannot be empty"):
                 llm.embed("")
 
-            with pytest.raises(ValueError, match="Text cannot be empty for embedding"):
+            with pytest.raises(ValueError, match="Input cannot be empty"):
                 llm.embed(None)
 
     def test_embed_no_data(self):

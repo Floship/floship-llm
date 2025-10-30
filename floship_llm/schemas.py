@@ -136,3 +136,31 @@ class ToolResult(BaseModel):
     error: Optional[str] = Field(
         default=None, description="Error message if execution failed."
     )
+
+
+class EmbeddingData(BaseModel):
+    """Represents a single embedding in the response."""
+
+    object: str = Field(default="embedding", description="Type of object.")
+    index: int = Field(
+        description="Index of the input string this embedding corresponds to."
+    )
+    embedding: Union[List[float], str] = Field(
+        description="Embedding vector (array for float/int8/uint8, base64 string for base64 format)."
+    )
+
+
+class EmbeddingUsage(BaseModel):
+    """Token usage information for embeddings."""
+
+    prompt_tokens: int = Field(description="Number of tokens in the prompt.")
+    total_tokens: int = Field(description="Total number of tokens used.")
+
+
+class EmbeddingResponse(BaseModel):
+    """Response from the embeddings API."""
+
+    object: str = Field(default="list", description="Type of response object.")
+    data: List[EmbeddingData] = Field(description="List of embeddings generated.")
+    model: str = Field(description="ID of the model that generated the embeddings.")
+    usage: EmbeddingUsage = Field(description="Token usage information.")

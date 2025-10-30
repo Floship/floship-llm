@@ -7,7 +7,7 @@ import re
 import time
 from dataclasses import dataclass
 from distutils.util import strtobool
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from openai import OpenAI, PermissionDeniedError
 from pydantic import BaseModel
@@ -199,6 +199,11 @@ class LLM:
             waf_config: LLMConfig instance for WAF protection settings (default: None, uses defaults)
             debug_mode: Enable detailed request/response logging (default: False)
 
+            Embeddings Parameters (when type='embedding'):
+            input_type: Type of input - 'search_document', 'search_query', 'classification', 'clustering' (default: None)
+            encoding_format: Output encoding - 'float' or 'base64' (default: 'float')
+            embedding_type: Embedding type - 'float', 'int8', 'uint8', 'binary', 'ubinary' (default: 'float')
+
         Note:
             frequency_penalty and presence_penalty are NOT supported by Heroku Inference API
             and will be ignored. Use allow_ignored_params=True to include them without error.
@@ -235,11 +240,6 @@ class LLM:
         if self.type not in ["completion", "embedding"]:
             raise ValueError("type must be 'completion' or 'embedding'")
 
-        if self.type == "embedding":
-            raise Exception(
-                "Embedding model is not supported yet. Use 'completion' type for now."
-            )
-
         # Initialize OpenAI client
         self.base_url = os.environ["INFERENCE_URL"]
         self.client = OpenAI(
@@ -250,12 +250,21 @@ class LLM:
         self.model = kwargs.get("model", os.environ["INFERENCE_MODEL_ID"])
         self.temperature = kwargs.get("temperature", 0.15)
 
-        # Heroku-specific parameters
+        # Heroku-specific parameters (for completions)
         self.max_completion_tokens = kwargs.get("max_completion_tokens", None)
         self.top_k = kwargs.get("top_k", None)
         self.top_p = kwargs.get("top_p", None)
         self.extended_thinking = kwargs.get("extended_thinking", None)
         self.allow_ignored_params = kwargs.get("allow_ignored_params", False)
+
+        # Heroku-specific parameters (for embeddings)
+        self.input_type = kwargs.get(
+            "input_type", None
+        )  # search_document, search_query, classification, clustering
+        self.encoding_format = kwargs.get("encoding_format", "float")  # float, base64
+        self.embedding_type = kwargs.get(
+            "embedding_type", "float"
+        )  # float, int8, uint8, binary, ubinary
 
         # Deprecated parameters (Heroku ignores these but won't error)
         # Kept for backward compatibility but not recommended
@@ -525,35 +534,157 @@ class LLM:
         return params
 
     def get_embedding_params(self) -> Dict[str, Any]:
-        """Build parameters for embedding request."""
-        return {"model": self.model}
+        """
+        Build parameters for embedding request according to Heroku Inference API spec.
+
+        See: https://devcenter.heroku.com/articles/heroku-inference-api-v1-embeddings
+
+        Returns:
+            Dictionary with embedding request parameters
+        """
+        params = {
+            "model": self.model,
+        }
+
+        # Add optional parameters if specified
+        if self.input_type is not None:
+            params["input_type"] = self.input_type
+
+        if self.encoding_format != "float":
+            params["encoding_format"] = self.encoding_format
+
+        if self.embedding_type != "float":
+            params["embedding_type"] = self.embedding_type
+
+        if self.allow_ignored_params:
+            params["allow_ignored_params"] = self.allow_ignored_params
+
+        return params
 
     # ========== Core API Methods ==========
 
-    def embed(self, text: str) -> List[float]:
+    def embed(
+        self, input: Union[str, List[str]], return_full_response: bool = False
+    ) -> Union[List[float], List[List[float]], Dict[str, Any]]:
         """
-        Generate embedding for text.
+        Generate embeddings for text using Heroku Inference API.
+
+        Supports single strings or arrays of strings (max 96 strings, 2048 characters each).
+        Recommended: length less than 512 tokens per string for optimal performance.
 
         Args:
-            text: Text to embed
+            input: Single string or list of strings to embed
+            return_full_response: If True, return full API response with metadata.
+                                 If False, return just the embedding vector(s).
 
         Returns:
-            Embedding vector
+            - If input is a single string and return_full_response=False: List[float] (single embedding)
+            - If input is a list and return_full_response=False: List[List[float]] (multiple embeddings)
+            - If return_full_response=True: Dict with full API response including usage metadata
 
         Raises:
-            ValueError: If text is empty
+            ValueError: If input is empty or invalid
+
+        Example:
+            >>> # Single embedding
+            >>> llm = LLM(type='embedding', model='cohere-embed-multilingual')
+            >>> embedding = llm.embed("Hello world")
+            >>> print(len(embedding))  # 1024 (or model-specific dimension)
+
+            >>> # Multiple embeddings
+            >>> embeddings = llm.embed(["Text 1", "Text 2"])
+            >>> print(len(embeddings))  # 2
+
+            >>> # Full response with metadata
+            >>> response = llm.embed("Hello", return_full_response=True)
+            >>> print(response['usage'])  # {'prompt_tokens': 2, 'total_tokens': 2}
         """
-        if not text:
-            raise ValueError("Text cannot be empty for embedding.")
+        # Validate input
+        if not input:
+            raise ValueError("Input cannot be empty for embedding.")
+
+        if isinstance(input, list):
+            if len(input) == 0:
+                raise ValueError("Input list cannot be empty.")
+            if len(input) > 96:
+                raise ValueError(
+                    "Input list cannot contain more than 96 strings (API limit)."
+                )
+            for idx, text in enumerate(input):
+                if not text or not isinstance(text, str):
+                    raise ValueError(
+                        f"Input at index {idx} must be a non-empty string."
+                    )
+                if len(text) > 2048:
+                    logger.warning(
+                        f"Input at index {idx} has {len(text)} characters. "
+                        "API recommends max 2048 characters per string."
+                    )
+        elif isinstance(input, str):
+            if len(input) > 2048:
+                logger.warning(
+                    f"Input has {len(input)} characters. "
+                    "API recommends max 2048 characters per string."
+                )
+        else:
+            raise ValueError("Input must be a string or list of strings.")
 
         params = self.get_embedding_params()
-        logger.info(f"Embedding text with parameters: {params}")
+        logger.info(f"Generating embeddings with parameters: {params}")
 
-        response = self.retry_handler.execute_with_retry(
-            self.client.embeddings.create, **params, input=text
-        )
+        # Track metrics
+        self.waf_metrics.total_requests += 1
 
-        return response.data[0].embedding if response.data else None
+        try:
+            response = self.retry_handler.execute_with_retry(
+                self.client.embeddings.create, **params, input=input
+            )
+
+            # Return full response if requested
+            if return_full_response:
+                return {
+                    "object": (
+                        response.object if hasattr(response, "object") else "list"
+                    ),
+                    "data": [
+                        {
+                            "object": (
+                                item.object if hasattr(item, "object") else "embedding"
+                            ),
+                            "index": item.index,
+                            "embedding": item.embedding,
+                        }
+                        for item in response.data
+                    ],
+                    "model": response.model,
+                    "usage": (
+                        {
+                            "prompt_tokens": response.usage.prompt_tokens,
+                            "total_tokens": response.usage.total_tokens,
+                        }
+                        if hasattr(response, "usage") and response.usage
+                        else None
+                    ),
+                }
+
+            # Return just the embeddings
+            if isinstance(input, list):
+                # Multiple inputs - return list of embeddings
+                return [item.embedding for item in response.data]
+            else:
+                # Single input - return single embedding
+                return response.data[0].embedding if response.data else None
+
+        except PermissionDeniedError as e:
+            # Track CloudFront 403 errors
+            if self._is_cloudfront_403(e):
+                self.waf_metrics.cloudfront_403_errors += 1
+                logger.error("CloudFront WAF blocked embedding request (403 error)")
+            self.waf_metrics.failed_requests += 1
+            raise
+        except Exception as e:
+            self.waf_metrics.failed_requests += 1
+            raise
 
     def prompt(
         self,

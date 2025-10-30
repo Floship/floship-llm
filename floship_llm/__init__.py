@@ -7,6 +7,9 @@ from .client import LLM, CloudFrontWAFSanitizer, LLMConfig, LLMMetrics
 from .content_processor import ContentProcessor
 from .retry_handler import RetryHandler
 from .schemas import (
+    EmbeddingData,
+    EmbeddingResponse,
+    EmbeddingUsage,
     Labels,
     Suggestion,
     SuggestionsResponse,
@@ -37,9 +40,12 @@ __all__ = [
     "Suggestion",
     "SuggestionsResponse",
     "ThinkingModel",
+    "EmbeddingData",
+    "EmbeddingResponse",
+    "EmbeddingUsage",
 ]
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 
 __all__ = [
     "LLM",

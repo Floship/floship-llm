@@ -5,7 +5,63 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.5.0] - 2025-10-28
+## [0.5.0] - 2025-10-30
+
+### Added
+- **Full Embeddings Support:** Complete implementation of Heroku Inference API `/v1/embeddings` endpoint
+  - Single and batch text embedding (up to 96 texts per request)
+  - All optional parameters: `input_type`, `encoding_format`, `embedding_type`
+  - Full response mode with metadata and token usage
+  - Input validation (max 96 strings, 2048 characters each)
+  - Warnings for oversized inputs
+- **Input Type Optimization:** Support for different use cases
+  - `search_document` - Optimize embeddings for document indexing
+  - `search_query` - Optimize embeddings for search queries
+  - `classification` - Optimize embeddings for training classifiers
+  - `clustering` - Optimize embeddings for grouping similar items
+- **Encoding and Embedding Types:**
+  - `encoding_format`: 'float' (default) or 'base64'
+  - `embedding_type`: 'float', 'int8', 'uint8', 'binary', 'ubinary'
+- **New Pydantic Schemas:**
+  - `EmbeddingData` - Single embedding object representation
+  - `EmbeddingUsage` - Token usage information
+  - `EmbeddingResponse` - Complete API response structure
+- **New Example File:** `example_embeddings.py` with 8 comprehensive examples
+  - Basic single and batch embeddings
+  - Full response with metadata
+  - All input types (search_document, search_query, classification, clustering)
+  - Practical similarity search demo with numpy
+- **Comprehensive Test Suite:** `tests/test_embeddings.py` with 30 tests
+  - Initialization and parameter tests
+  - Single and batch embedding tests
+  - Input validation tests
+  - Different input types tests
+  - Encoding format tests
+  - Metrics tracking tests
+  - Schema validation tests
+  - Retry behavior tests
+- **Enhanced Documentation:**
+  - Complete embeddings section in README.md
+  - API reference for all embedding parameters
+  - Practical examples including similarity search
+  - Limits and recommendations clearly documented
+
+### Changed
+- **Updated `embed()` method:** Completely rewritten with full API support
+  - Now accepts `Union[str, List[str]]` for single or batch inputs
+  - Returns `Union[List[float], List[List[float]], Dict]` based on input and options
+  - Added `return_full_response` parameter for metadata access
+  - Comprehensive input validation and error messages
+  - Inherits retry mechanism and WAF protection
+- **Updated `get_embedding_params()`:** Added all optional parameters from Heroku API
+- **LLM initialization:** Removed exception blocking embedding type
+- **Version bumped:** 0.4.0 → 0.5.0
+
+### Fixed
+- Test `test_init_embedding_type_not_supported` renamed to `test_init_embedding_type_supported`
+- Updated error message in `test_embed_empty_text` to match new validation
+
+## [0.4.0] - 2025-10-28
 
 ### Added
 - **CloudFront WAF Protection:** Major security and reliability enhancement
