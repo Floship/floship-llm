@@ -160,6 +160,23 @@ repos:
       - id: requirements-txt-fixer
         name: � Fix requirements.txt
 
+  # UV lock file sync - ensure uv.lock is up to date with pyproject.toml
+  - repo: local
+    hooks:
+      - id: uv-lock-check
+        name: Check uv.lock is in sync with pyproject.toml
+        entry: uv lock --check
+        language: system
+        files: ^pyproject\.toml$
+        pass_filenames: false
+      - id: uv-sync-on-toml-change
+        name: Auto-sync uv.lock when pyproject.toml changes
+        entry: bash -c 'uv lock && git add uv.lock'
+        language: system
+        files: ^pyproject\.toml$
+        pass_filenames: false
+        stages: [commit]
+
 # Note: Safety check for dependencies is better run separately:
 # pip install safety
 # safety check --json
