@@ -27,6 +27,7 @@ This affected applications like support-app that generate PR descriptions from d
    - Sanitizes XSS tags: `<script>` → `[SCRIPT_TAG]`
    - Sanitizes JS protocols: `javascript:` → `js:`
    - Sanitizes event handlers: `onerror=` → `on_error=`
+   - Sanitizes URL templates: `{/other_user}` → `[URL_TEMPLATE]` (GitHub API patterns)
    - Case-insensitive detection
    - Preserves semantic meaning for LLM understanding
 

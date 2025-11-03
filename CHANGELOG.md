@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **CloudFront WAF GitHub Webhook Issue:** Added sanitization for GitHub API URL template patterns (e.g., `{/other_user}`, `{/gist_id}`) that were triggering CloudFront WAF 403 errors when processing GitHub webhook payloads
+  - New `url_templates` blocker category in `CloudFrontWAFSanitizer`
+  - Pattern `{/[^}]+}` replaced with `[URL_TEMPLATE]`
+  - Preserves base URLs while removing template placeholders
+  - Added 2 new tests: `test_github_webhook_url_templates` and `test_github_webhook_realistic_payload`
+
 ## [0.5.0] - 2025-10-30
 
 ### Added
