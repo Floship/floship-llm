@@ -182,6 +182,33 @@ class TestCloudFrontWAFSanitizer:
         # Verify safe markers are present
         assert "[URL_TEMPLATE]" in sanitized
 
+    def test_jira_wiki_markup_double_braces(self):
+        """Test JIRA wiki markup with double curly braces that trigger CloudFront WAF."""
+        content = """
+        h2. Problem
+        
+        SingPost shipment cancellation is failing with XML parsing errors.
+        The error message indicates malformed XML with mismatched tags during {{deleteShipment}} requests.
+        
+        *Error:* {{<unknown>:9:4: mismatched tag}} - SingPost API returns XML
+        
+        h2. Root Cause
+        
+        The XML repair functionality was *never actually working* due to {{SingPostService._retry_with_xml_repair()}}
+        being a *stub* that immediately raises {{"XML repair not yet implemented"}}
+        """
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+
+        assert was_sanitized
+        # Verify double curly braces are sanitized
+        assert "{{" not in sanitized
+        assert "}}" not in sanitized
+        # Verify content is preserved (now in square brackets instead of double curly)
+        assert "[deleteShipment]" in sanitized
+        assert '["XML repair not yet implemented"]' in sanitized
+        # Original wiki markup should be replaced
+        assert "{{deleteShipment}}" not in sanitized
+
 
 class TestLLMConfig:
     """Test LLM configuration."""

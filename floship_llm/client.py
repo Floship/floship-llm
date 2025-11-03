@@ -112,6 +112,10 @@ class CloudFrontWAFSanitizer:
             # GitHub API URL templates like {/other_user}, {/gist_id}, etc.
             (r"\{/[^}]+\}", "[URL_TEMPLATE]"),
         ],
+        "wiki_markup": [
+            # JIRA/Confluence wiki markup double curly braces {{text}}
+            (r"\{\{([^}]+)\}\}", r"[\1]"),
+        ],
     }
 
     @classmethod
