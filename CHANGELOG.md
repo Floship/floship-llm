@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2025-11-03
+
 ### Fixed
 - **CloudFront WAF JIRA Wiki Markup Issue:** Added sanitization for JIRA/Confluence wiki markup double curly braces `{{text}}` that were triggering CloudFront WAF 403 errors when ticket descriptions were passed to LLM
   - New `wiki_markup` blocker category in `CloudFrontWAFSanitizer`
@@ -18,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Pattern `{/[^}]+}` replaced with `[URL_TEMPLATE]`
   - Preserves base URLs while removing template placeholders
   - Added 2 new tests: `test_github_webhook_url_templates` and `test_github_webhook_realistic_payload`
+
+### Changed
+- Cleaned up redundant documentation files from repository root
 
 ## [0.5.0] - 2025-10-30
 
