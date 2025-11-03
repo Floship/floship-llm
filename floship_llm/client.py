@@ -108,6 +108,10 @@ class CloudFrontWAFSanitizer:
             (r"onerror\s*=", "on_error="),
             (r"onload\s*=", "on_load="),
         ],
+        "url_templates": [
+            # GitHub API URL templates like {/other_user}, {/gist_id}, etc.
+            (r"\{/[^}]+\}", "[URL_TEMPLATE]"),
+        ],
     }
 
     @classmethod

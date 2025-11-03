@@ -131,6 +131,57 @@ class TestCloudFrontWAFSanitizer:
         assert "../" not in sanitized
         assert "src/utils.py" in sanitized  # Semantic meaning preserved
 
+    def test_github_webhook_url_templates(self):
+        """Test GitHub API URL templates that trigger CloudFront WAF."""
+        content = """
+        GitHub webhook payload with URL templates:
+        'following_url': 'https://api.github.com/users/Floship/following{/other_user}'
+        'gists_url': 'https://api.github.com/users/Rawgeek/gists{/gist_id}'
+        'starred_url': 'https://api.github.com/users/Rawgeek/starred{/owner}{/repo}'
+        'keys_url': 'https://api.github.com/repos/Floship/Shipping/keys{/key_id}'
+        'collaborators_url': 'https://api.github.com/repos/Floship/Shipping/collaborators{/collaborator}'
+        """
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+
+        assert was_sanitized
+        assert "{/" not in sanitized  # URL template placeholders removed
+        assert "https://api.github.com" in sanitized  # Base URLs preserved
+        assert "[URL_TEMPLATE]" in sanitized  # Replaced with safe marker
+
+    def test_github_webhook_realistic_payload(self):
+        """Test realistic GitHub webhook payload that triggers CloudFront WAF."""
+        # Simulating actual GitHub webhook payload with multiple URL templates
+        content = """
+        Analyzing GitHub pull request:
+        User: {'login': 'Rawgeek', 'id': 1498478, 
+               'followers_url': 'https://api.github.com/users/Rawgeek/followers',
+               'following_url': 'https://api.github.com/users/Rawgeek/following{/other_user}',
+               'gists_url': 'https://api.github.com/users/Rawgeek/gists{/gist_id}',
+               'starred_url': 'https://api.github.com/users/Rawgeek/starred{/owner}{/repo}'}
+        Repo: {'keys_url': 'https://api.github.com/repos/Floship/Shipping/keys{/key_id}',
+               'collaborators_url': 'https://api.github.com/repos/Floship/Shipping/collaborators{/collaborator}',
+               'teams_url': 'https://api.github.com/repos/Floship/Shipping/teams',
+               'branches_url': 'https://api.github.com/repos/Floship/Shipping/branches{/branch}',
+               'issues_url': 'https://api.github.com/repos/Floship/Shipping/issues{/number}',
+               'pulls_url': 'https://api.github.com/repos/Floship/Shipping/pulls{/number}'}
+        """
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+
+        assert was_sanitized
+        # Verify all URL template patterns are removed
+        assert "{/other_user}" not in sanitized
+        assert "{/gist_id}" not in sanitized
+        assert "{/owner}{/repo}" not in sanitized
+        assert "{/key_id}" not in sanitized
+        assert "{/collaborator}" not in sanitized
+        assert "{/branch}" not in sanitized
+        assert "{/number}" not in sanitized
+        # Verify base URLs are preserved
+        assert "https://api.github.com/users/Rawgeek" in sanitized
+        assert "https://api.github.com/repos/Floship/Shipping" in sanitized
+        # Verify safe markers are present
+        assert "[URL_TEMPLATE]" in sanitized
+
 
 class TestLLMConfig:
     """Test LLM configuration."""
