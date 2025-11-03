@@ -1,4 +1,4 @@
-"""Floship LLM Client Library
+"""Floship LLM Client Library.
 
 A reusable LLM client library for interacting with OpenAI-compatible inference endpoints.
 """
@@ -45,7 +45,7 @@ __all__ = [
     "EmbeddingUsage",
 ]
 
-__version__ = "0.5.2"
+__version__ = "0.5.3"
 
 __all__ = [
     "LLM",

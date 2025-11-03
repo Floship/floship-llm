@@ -29,12 +29,12 @@ class TestModuleImports:
     def test_version_is_string(self):
         """Test that __version__ is a string."""
         assert isinstance(__version__, str)
-        assert __version__ == "0.5.2"
+        assert __version__ == "0.5.3"
 
     def test_version_accessible_from_module(self):
         """Test that version is accessible from the main module."""
         assert hasattr(floship_llm, "__version__")
-        assert floship_llm.__version__ == "0.5.2"
+        assert floship_llm.__version__ == "0.5.3"
 
     def test_all_exports_defined(self):
         """Test that __all__ is properly defined."""
