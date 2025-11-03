@@ -28,6 +28,7 @@ This affected applications like support-app that generate PR descriptions from d
    - Sanitizes JS protocols: `javascript:` → `js:`
    - Sanitizes event handlers: `onerror=` → `on_error=`
    - Sanitizes URL templates: `{/other_user}` → `[URL_TEMPLATE]` (GitHub API patterns)
+   - Sanitizes wiki markup: `{{text}}` → `[text]` (JIRA/Confluence monospace formatting)
    - Case-insensitive detection
    - Preserves semantic meaning for LLM understanding
 

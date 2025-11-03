@@ -8,7 +8,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- **CloudFront WAF GitHub Webhook Issue:** Added sanitization for GitHub API URL template patterns (e.g., `{/other_user}`, `{/gist_id}`) that were triggering CloudFront WAF 403 errors when processing GitHub webhook payloads
+- **CloudFront WAF JIRA Wiki Markup Issue:** Added sanitization for JIRA/Confluence wiki markup double curly braces `{{text}}` that were triggering CloudFront WAF 403 errors when ticket descriptions were passed to LLM
+  - New `wiki_markup` blocker category in `CloudFrontWAFSanitizer`
+  - Pattern `{{text}}` replaced with `[text]` to preserve content while removing WAF triggers
+  - Commonly used in JIRA for monospace formatting (e.g., `{{deleteShipment}}`, `{{"error message"}}`)
+  - Added test: `test_jira_wiki_markup_double_braces`
+- **CloudFront WAF GitHub API URL Templates:** Added sanitization for GitHub API URL template patterns (e.g., `{/other_user}`, `{/gist_id}`) that were triggering CloudFront WAF 403 errors when processing GitHub webhook payloads
   - New `url_templates` blocker category in `CloudFrontWAFSanitizer`
   - Pattern `{/[^}]+}` replaced with `[URL_TEMPLATE]`
   - Preserves base URLs while removing template placeholders
