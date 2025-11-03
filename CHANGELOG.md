@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **CloudFront WAF Django ORM Issue:** Added sanitization for Django ORM `filter=Q(` pattern that was triggering CloudFront WAF 403 errors as potential SQL injection
+  - New `sql_injection` blocker category in `CloudFrontWAFSanitizer`
+  - Pattern `filter=Q(` replaced with `filter_Q(` to preserve functionality while removing WAF trigger
+  - Commonly used in Django queries like `filter=Q(service_name__in=PICK_PACK_SERVICES)`
+  - Added test: `test_django_orm_filter_q_pattern`
+
 ## [0.5.2] - 2025-11-03
 
 ### Fixed

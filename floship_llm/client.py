@@ -116,6 +116,10 @@ class CloudFrontWAFSanitizer:
             # JIRA/Confluence wiki markup double curly braces {{text}}
             (r"\{\{([^}]+)\}\}", r"[\1]"),
         ],
+        "sql_injection": [
+            # Django ORM filter=Q patterns that look like SQL injection
+            (r"filter\s*=\s*Q\(", "filter_Q("),
+        ],
     }
 
     @classmethod

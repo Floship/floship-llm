@@ -209,6 +209,31 @@ class TestCloudFrontWAFSanitizer:
         # Original wiki markup should be replaced
         assert "{{deleteShipment}}" not in sanitized
 
+    def test_django_orm_filter_q_pattern(self):
+        """Test Django ORM filter=Q pattern that triggers CloudFront WAF."""
+        content = """
+        # Django ORM query that causes WAF blocking
+        def get_services(self):
+            from django.db.models import Q
+            
+            PICK_PACK_SERVICES = ['pick', 'pack']
+            services = Service.objects.filter=Q(service_name__in=PICK_PACK_SERVICES)
+            
+            # More complex query
+            results = Model.objects.filter=Q(status='active') & Q(type='urgent')
+        """
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+
+        assert was_sanitized
+        # Verify filter=Q pattern is sanitized
+        assert "filter=Q(" not in sanitized
+        assert "filter_Q(" in sanitized
+        # Verify content structure is preserved
+        assert "service_name__in=PICK_PACK_SERVICES" in sanitized
+        assert "status='active'" in sanitized
+        # Original pattern should be replaced
+        assert "objects.filter_Q(" in sanitized
+
 
 class TestLLMConfig:
     """Test LLM configuration."""
