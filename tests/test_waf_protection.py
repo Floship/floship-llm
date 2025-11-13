@@ -153,7 +153,7 @@ class TestCloudFrontWAFSanitizer:
         # Simulating actual GitHub webhook payload with multiple URL templates
         content = """
         Analyzing GitHub pull request:
-        User: {'login': 'Rawgeek', 'id': 1498478, 
+        User: {'login': 'Rawgeek', 'id': 1498478,
                'followers_url': 'https://api.github.com/users/Rawgeek/followers',
                'following_url': 'https://api.github.com/users/Rawgeek/following{/other_user}',
                'gists_url': 'https://api.github.com/users/Rawgeek/gists{/gist_id}',
@@ -186,14 +186,14 @@ class TestCloudFrontWAFSanitizer:
         """Test JIRA wiki markup with double curly braces that trigger CloudFront WAF."""
         content = """
         h2. Problem
-        
+
         SingPost shipment cancellation is failing with XML parsing errors.
         The error message indicates malformed XML with mismatched tags during {{deleteShipment}} requests.
-        
+
         *Error:* {{<unknown>:9:4: mismatched tag}} - SingPost API returns XML
-        
+
         h2. Root Cause
-        
+
         The XML repair functionality was *never actually working* due to {{SingPostService._retry_with_xml_repair()}}
         being a *stub* that immediately raises {{"XML repair not yet implemented"}}
         """
@@ -209,16 +209,36 @@ class TestCloudFrontWAFSanitizer:
         # Original wiki markup should be replaced
         assert "{{deleteShipment}}" not in sanitized
 
+    def test_jira_image_markup(self):
+        """Test JIRA image markup patterns like !image.png|options! are sanitized."""
+        content = """
+        Description: !image-20251112-030524.png|width=686,alt=\"image-20251112-030524.png\"!
+        Another example: See attached !screenshot.jpg! in the ticket.
+        """
+
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+
+        assert was_sanitized
+        # Verify image markup is replaced with [IMAGE:...]
+        assert "!image-20251112-030524.png|width=686" not in sanitized
+        assert (
+            '[IMAGE:image-20251112-030524.png|width=686,alt="image-20251112-030524.png"]'
+            in sanitized
+        )
+        # Short form
+        assert "!screenshot.jpg!" not in sanitized
+        assert "[IMAGE:screenshot.jpg]" in sanitized
+
     def test_django_orm_filter_q_pattern(self):
         """Test Django ORM filter=Q pattern that triggers CloudFront WAF."""
         content = """
         # Django ORM query that causes WAF blocking
         def get_services(self):
             from django.db.models import Q
-            
+
             PICK_PACK_SERVICES = ['pick', 'pack']
             services = Service.objects.filter=Q(service_name__in=PICK_PACK_SERVICES)
-            
+
             # More complex query
             results = Model.objects.filter=Q(status='active') & Q(type='urgent')
         """
@@ -375,10 +395,7 @@ class TestLLMWAFIntegration:
     def test_is_cloudfront_403(self, mock_env, mock_client):
         """Test CloudFront 403 error detection."""
         llm = LLM()
-
         # Test 403 error - create mock response
-        from unittest.mock import Mock
-
         mock_response = Mock()
         mock_response.status_code = 403
         error_403 = PermissionDeniedError(

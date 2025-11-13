@@ -115,6 +115,13 @@ class CloudFrontWAFSanitizer:
         "wiki_markup": [
             # JIRA/Confluence wiki markup double curly braces {{text}}
             (r"\{\{([^}]+)\}\}", r"[\1]"),
+            # JIRA image markup: !image-filename.png|options!
+            # Only match if it contains a file extension to avoid false positives
+            # Example: !image-20251112-030524.png|width=686,alt="image.png"!
+            (
+                r"!([a-zA-Z0-9_\-]+\.(png|jpg|jpeg|gif|pdf|svg|webp)[^!]*)!",
+                r"[IMAGE:\1]",
+            ),
         ],
         "sql_injection": [
             # Django ORM filter=Q patterns that look like SQL injection
@@ -137,7 +144,7 @@ class CloudFrontWAFSanitizer:
         sanitized = content
         was_sanitized = False
 
-        for category, patterns in cls.BLOCKERS.items():
+        for _category, patterns in cls.BLOCKERS.items():
             for pattern, replacement in patterns:
                 if re.search(pattern, sanitized, re.IGNORECASE):
                     sanitized = re.sub(

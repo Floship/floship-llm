@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4] - 2025-11-13
+
+### Fixed
+- **CloudFront WAF JIRA Image Markup:** Added sanitization for JIRA/Confluence image markup patterns `!filename|options!` that were triggering CloudFront WAF 403 errors
+  - Replaces `!filename|options!` with `[IMAGE:filename|options]` to preserve semantic meaning while avoiding WAF triggers
+  - Handles short-form `!screenshot.jpg!` and extended options like `|width=...,alt="..."`
+  - Added test: `test_jira_image_markup`
+
+
 ## [0.5.3] - 2025-11-03
 
 ### Fixed
