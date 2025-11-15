@@ -149,13 +149,13 @@ class TestLLM:
         """Test supports_parallel_requests property."""
         with patch("floship_llm.client.OpenAI"):
             llm = LLM()
-            # strtobool returns 1 for True, 0 for False
-            assert llm.supports_parallel_requests == 1
+            # Returns boolean True/False
+            assert llm.supports_parallel_requests is True
 
         with patch.dict(os.environ, {"INFERENCE_SUPPORTS_PARALLEL_REQUESTS": "False"}):
             with patch("floship_llm.client.OpenAI"):
                 llm = LLM()
-                assert llm.supports_parallel_requests == 0
+                assert llm.supports_parallel_requests is False
 
     def test_supports_frequency_penalty_property(self):
         """Test supports_frequency_penalty property - Heroku does not support this."""

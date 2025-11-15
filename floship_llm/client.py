@@ -6,7 +6,6 @@ import os
 import re
 import time
 from dataclasses import dataclass
-from distutils.util import strtobool
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 from openai import OpenAI, PermissionDeniedError
@@ -19,6 +18,11 @@ from .tool_manager import ToolManager
 from .utils import lm_json_utils
 
 logger = logging.getLogger(__name__)
+
+
+def _str_to_bool(value: str) -> bool:
+    """Convert string to boolean (replacement for deprecated distutils.util.strtobool)."""
+    return value.lower() in ("yes", "true", "t", "y", "1")
 
 
 @dataclass
@@ -410,7 +414,7 @@ class LLM:
     @property
     def supports_parallel_requests(self) -> bool:
         """Check if model supports parallel requests."""
-        return strtobool(os.environ.get("INFERENCE_SUPPORTS_PARALLEL_REQUESTS", "True"))
+        return _str_to_bool(os.environ.get("INFERENCE_SUPPORTS_PARALLEL_REQUESTS", "True"))
 
     @property
     def supports_frequency_penalty(self) -> bool:
