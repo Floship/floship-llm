@@ -414,7 +414,9 @@ class LLM:
     @property
     def supports_parallel_requests(self) -> bool:
         """Check if model supports parallel requests."""
-        return _str_to_bool(os.environ.get("INFERENCE_SUPPORTS_PARALLEL_REQUESTS", "True"))
+        return _str_to_bool(
+            os.environ.get("INFERENCE_SUPPORTS_PARALLEL_REQUESTS", "True")
+        )
 
     @property
     def supports_frequency_penalty(self) -> bool:
