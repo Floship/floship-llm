@@ -422,6 +422,65 @@ class LLM:
         error_str = str(error).lower()
         return "403" in error_str or "forbidden" in error_str
 
+    def _log_waf_blocked_content(self, messages: List[Dict], context: str = ""):
+        """
+        Log content that triggered a CloudFront WAF block for debugging.
+
+        Args:
+            messages: The messages that were sent when WAF blocked
+            context: Additional context string for the log
+        """
+        if not messages:
+            logger.warning(f"CloudFront WAF block {context}: No messages to log")
+            return
+
+        # Log summary of what triggered the block
+        logger.error(
+            f"CloudFront WAF block {context}: Analyzing {len(messages)} messages"
+        )
+
+        # Check each message for potential blockers
+        for i, msg in enumerate(messages[-5:]):  # Only check last 5 messages
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+
+            # Truncate for logging
+            if isinstance(content, str) and len(content) > 500:
+                content_preview = content[:500] + "..."
+            else:
+                content_preview = str(content)[:500]
+
+            # Check for known blocker patterns
+            blockers = self.waf_sanitizer.check_for_blockers(str(content))
+            if blockers:
+                logger.error(
+                    f"  Message {i} ({role}): Found {len(blockers)} WAF blockers: "
+                    f"{[b[0] for b in blockers[:5]]}"
+                )
+                logger.debug(f"  Content preview: {content_preview}")
+            else:
+                # Still log if it's the last message (most likely culprit)
+                if i == len(messages[-5:]) - 1:
+                    logger.warning(
+                        f"  Message {i} ({role}): No obvious blockers found. "
+                        f"Content length: {len(str(content))}"
+                    )
+                    logger.debug(f"  Content preview: {content_preview}")
+
+            # Check tool_calls if present
+            if "tool_calls" in msg:
+                for tc in msg.get("tool_calls", [])[:3]:
+                    func = tc.get("function", {})
+                    args = func.get("arguments", "")
+                    if isinstance(args, str) and len(args) > 200:
+                        args_preview = args[:200] + "..."
+                    else:
+                        args_preview = str(args)[:200]
+                    logger.debug(
+                        f"    Tool call: {func.get('name', 'unknown')} - "
+                        f"args preview: {args_preview}"
+                    )
+
     def get_waf_metrics(self) -> dict:
         """Get current CloudFront WAF metrics."""
         return self.waf_metrics.to_dict()
@@ -988,6 +1047,11 @@ class LLM:
                             f"Retrying in {wait_time}s with sanitization..."
                         )
 
+                        # Log what content triggered the block
+                        self._log_waf_blocked_content(
+                            self.messages, f"(attempt {waf_attempt + 1}, prompt method)"
+                        )
+
                         # Wait before retry
                         time.sleep(wait_time)
 
@@ -1014,6 +1078,10 @@ class LLM:
                         if self._is_cloudfront_403(e):
                             logger.error(
                                 f"CloudFront WAF: Failed after {self.waf_config.max_waf_retries + 1} attempts"
+                            )
+                            # Log final state of messages that caused the block
+                            self._log_waf_blocked_content(
+                                self.messages, "(final failure, prompt method)"
                             )
                         self.waf_metrics.failed_requests += 1
 
@@ -1153,6 +1221,11 @@ class LLM:
                         f"Retrying in {wait_time}s with sanitization..."
                     )
 
+                    # Log what content triggered the block
+                    self._log_waf_blocked_content(
+                        self.messages, f"(attempt {waf_attempt + 1}, stream method)"
+                    )
+
                     # Wait before retry
                     time.sleep(wait_time)
 
@@ -1177,6 +1250,10 @@ class LLM:
                     if self._is_cloudfront_403(e):
                         logger.error(
                             f"CloudFront WAF: Streaming failed after {self.waf_config.max_waf_retries + 1} attempts"
+                        )
+                        # Log final state of messages that caused the block
+                        self._log_waf_blocked_content(
+                            self.messages, "(final failure, stream method)"
                         )
                     self.waf_metrics.failed_requests += 1
 
