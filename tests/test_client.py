@@ -14,6 +14,28 @@ from floship_llm.client import LLM
 from floship_llm.schemas import ThinkingModel, ToolFunction, ToolParameter
 
 
+def create_mock_stream_response(content: str):
+    """Create a mock streaming response that yields chunks.
+
+    Args:
+        content: The full response content to stream in chunks
+
+    Returns:
+        A list of mock chunk objects that can be iterated over
+    """
+    chunks = []
+    # Split content into chunks (simulate streaming)
+    for char in content:
+        mock_chunk = Mock()
+        mock_delta = Mock()
+        mock_delta.content = char
+        mock_choice = Mock()
+        mock_choice.delta = mock_delta
+        mock_chunk.choices = [mock_choice]
+        chunks.append(mock_chunk)
+    return chunks
+
+
 class ResponseModelForTesting(BaseModel):
     """Test pydantic model for response format testing."""
 
@@ -381,15 +403,11 @@ class TestLLM:
             assert result is None
 
     def test_prompt_success(self):
-        """Test successful prompt generation."""
+        """Test successful prompt generation with streaming (default)."""
         with patch("floship_llm.client.OpenAI") as mock_openai:
-            # Create a mock response
-            mock_choice = Mock()
-            mock_choice.message.content = "Test response"
-            mock_response = Mock()
-            mock_response.choices = [mock_choice]
+            # Create mock streaming response
             mock_openai.return_value.chat.completions.create.return_value = (
-                mock_response
+                create_mock_stream_response("Test response")
             )
 
             llm = LLM()
@@ -405,12 +423,9 @@ class TestLLM:
     def test_prompt_with_system_message(self):
         """Test prompt with system message."""
         with patch("floship_llm.client.OpenAI") as mock_openai:
-            mock_choice = Mock()
-            mock_choice.message.content = "Test response"
-            mock_response = Mock()
-            mock_response.choices = [mock_choice]
+            # Create mock streaming response
             mock_openai.return_value.chat.completions.create.return_value = (
-                mock_response
+                create_mock_stream_response("Test response")
             )
 
             llm = LLM()
@@ -425,12 +440,9 @@ class TestLLM:
     def test_prompt_continuous_false(self):
         """Test prompt with continuous=False."""
         with patch("floship_llm.client.OpenAI") as mock_openai:
-            mock_choice = Mock()
-            mock_choice.message.content = "Test response"
-            mock_response = Mock()
-            mock_response.choices = [mock_choice]
+            # Create mock streaming response
             mock_openai.return_value.chat.completions.create.return_value = (
-                mock_response
+                create_mock_stream_response("Test response")
             )
 
             llm = LLM(continuous=False)
@@ -440,14 +452,11 @@ class TestLLM:
             assert len(llm.messages) == 0  # Should be reset
 
     def test_prompt_with_response_format(self):
-        """Test prompt with response format."""
+        """Test prompt with response format (structured output with streaming)."""
         with patch("floship_llm.client.OpenAI") as mock_openai:
-            mock_choice = Mock()
-            mock_choice.message.content = '{"name": "test", "value": 42}'
-            mock_response = Mock()
-            mock_response.choices = [mock_choice]
+            # Create mock streaming response with JSON content
             mock_openai.return_value.chat.completions.create.return_value = (
-                mock_response
+                create_mock_stream_response('{"name": "test", "value": 42}')
             )
 
             with patch(
@@ -547,12 +556,9 @@ class TestLLM:
     def test_prompt_resets_retry_count(self):
         """Test that new prompt resets retry count."""
         with patch("floship_llm.client.OpenAI") as mock_openai:
-            mock_choice = Mock()
-            mock_choice.message.content = "Test response"
-            mock_response = Mock()
-            mock_response.choices = [mock_choice]
+            # Create mock streaming response
             mock_openai.return_value.chat.completions.create.return_value = (
-                mock_response
+                create_mock_stream_response("Test response")
             )
 
             llm = LLM()
@@ -894,23 +900,18 @@ class TestLLM:
             assert "".join(chunks) == "Final answer"
 
     def test_stream_final_response_no_tools_returns_string(self):
-        """Test that streaming flag is ignored when no tools are used."""
+        """Test that streaming is used by default when no tools are enabled."""
         with patch("floship_llm.client.OpenAI") as mock_openai:
             mock_client = mock_openai.return_value
 
-            # Regular response (no tool calls)
-            mock_message = Mock()
-            mock_message.tool_calls = None
-            mock_message.content = "Direct answer"
-
-            response = Mock()
-            response.choices = [Mock(message=mock_message)]
-
-            mock_client.chat.completions.create.return_value = response
+            # Create mock streaming response (streaming is used by default when no tools)
+            mock_client.chat.completions.create.return_value = (
+                create_mock_stream_response("Direct answer")
+            )
 
             llm = LLM(enable_tools=False, continuous=False)
 
-            # Even with stream_final_response=True, should return string (no tools used)
+            # Should use streaming internally and return collected string
             result = llm.prompt("Test", stream_final_response=True)
 
             assert isinstance(result, str)
@@ -1077,3 +1078,129 @@ class TestLLM:
             # Last message should be the assistant's response
             assert llm.messages[-1]["role"] == "assistant"
             assert llm.messages[-1]["content"] == "Streamed"
+
+    # ========== Chat Alias Tests ==========
+
+    def test_chat_alias_exists(self):
+        """Test that chat is an alias for prompt."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            # chat should be the same method as prompt
+            assert llm.chat == llm.prompt
+
+    def test_chat_simple_response(self):
+        """Test simple chat interaction using streaming (default behavior)."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            mock_client = mock_openai.return_value
+            mock_client.chat.completions.create.return_value = (
+                create_mock_stream_response("Hello! How can I help you today?")
+            )
+
+            llm = LLM(continuous=False)
+            result = llm.chat("Hi there!")
+
+            assert isinstance(result, str)
+            assert result == "Hello! How can I help you today?"
+            # Verify streaming was used
+            mock_client.chat.completions.create.assert_called_once()
+            call_kwargs = mock_client.chat.completions.create.call_args[1]
+            assert call_kwargs.get("stream") is True
+
+    def test_chat_with_tools(self):
+        """Test chat with tools enabled (non-streaming mode)."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            mock_client = mock_openai.return_value
+
+            # First call: LLM returns a tool call
+            mock_tool_call = Mock()
+            mock_tool_call.id = "call_123"
+            mock_tool_call.function.name = "get_weather"
+            mock_tool_call.function.arguments = '{"city": "London"}'
+
+            mock_message_with_tool = Mock()
+            mock_message_with_tool.content = None
+            mock_message_with_tool.tool_calls = [mock_tool_call]
+
+            mock_choice_with_tool = Mock()
+            mock_choice_with_tool.message = mock_message_with_tool
+            mock_choice_with_tool.finish_reason = "tool_calls"
+
+            first_response = Mock()
+            first_response.choices = [mock_choice_with_tool]
+
+            # Second call: Final response after tool execution
+            mock_final_message = Mock()
+            mock_final_message.content = "The weather in London is sunny and 22°C."
+            mock_final_message.tool_calls = None
+
+            mock_final_choice = Mock()
+            mock_final_choice.message = mock_final_message
+            mock_final_choice.finish_reason = "stop"
+
+            final_response = Mock()
+            final_response.choices = [mock_final_choice]
+
+            call_count = 0
+
+            def mock_create(**kwargs):
+                nonlocal call_count
+                call_count += 1
+                return first_response if call_count == 1 else final_response
+
+            mock_client.chat.completions.create = mock_create
+
+            llm = LLM(enable_tools=True, continuous=False)
+
+            def get_weather(city: str):
+                """Get weather for a city."""
+                return f"Weather in {city}: Sunny, 22°C"
+
+            llm.add_tool(
+                ToolFunction(
+                    name="get_weather",
+                    description="Get the weather for a city",
+                    parameters=[
+                        ToolParameter(
+                            name="city",
+                            type="string",
+                            description="The city to get weather for",
+                            required=True,
+                        )
+                    ],
+                    function=get_weather,
+                )
+            )
+
+            result = llm.chat("What's the weather in London?")
+
+            assert isinstance(result, str)
+            assert "sunny" in result.lower() or "22" in result
+            assert call_count == 2  # Two API calls: tool call + final response
+
+    def test_chat_with_structured_response(self):
+        """Test chat with structured response format (Pydantic model)."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            mock_client = mock_openai.return_value
+            # Streaming returns JSON response
+            mock_client.chat.completions.create.return_value = (
+                create_mock_stream_response('{"name": "Alice", "value": 100}')
+            )
+
+            with patch(
+                "floship_llm.utils.lm_json_utils.extract_strict_json"
+            ) as mock_extract:
+                mock_extract.return_value = '{"name": "Alice", "value": 100}'
+
+                llm = LLM(response_format=ResponseModelForTesting, continuous=False)
+                llm.messages = []  # Clear system message added during init
+
+                result = llm.chat("Generate a test record")
+
+                # Result should be parsed as Pydantic model
+                assert isinstance(result, ResponseModelForTesting)
+                assert result.name == "Alice"
+                assert result.value == 100
+                # Verify streaming was used
+                mock_client.chat.completions.create.assert_called_once()
+                call_kwargs = mock_client.chat.completions.create.call_args[1]
+                assert call_kwargs.get("stream") is True

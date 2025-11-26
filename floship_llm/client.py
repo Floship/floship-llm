@@ -473,7 +473,7 @@ class LLM:
             content = (
                 f"{content}\n"
                 f"Here is the JSON schema you need to follow for the response: "
-                f"{self.response_format.schema_json(indent=2)}\n"
+                f"{json.dumps(self.response_format.model_json_schema(), indent=2)}\n"
                 f"Do not return the entire schema, only the response in JSON format. "
                 f"Use the schema only as a guide for filling in.\n"
             )
@@ -717,9 +717,13 @@ class LLM:
         system: Optional[str] = None,
         retry: bool = False,
         stream_final_response: bool = False,
+        force_no_stream: bool = False,
     ) -> str:
         """
         Generate completion from prompt with automatic CloudFront WAF protection.
+
+        By default, uses streaming to prevent Heroku 408 timeout errors on long responses.
+        Falls back to non-streaming only when tools are enabled.
 
         Args:
             prompt: User prompt
@@ -728,11 +732,19 @@ class LLM:
             stream_final_response: If True and tools are used, stream the final response
                                   after tools complete (generator). If False or no tools
                                   are used, returns complete response as string.
+            force_no_stream: Force non-streaming mode (not recommended, may cause 408 timeouts)
 
         Returns:
             Generated response text, structured output, or generator (if streaming final response)
 
         Note:
+            Streaming by Default: This method uses streaming internally to avoid Heroku's
+            408 timeout errors. The response is collected and returned as a complete string
+            (or parsed into structured output if response_format is set).
+
+            Tool Calls: When tools are enabled, non-streaming mode is used since streaming
+            doesn't support tool calls.
+
             CloudFront WAF Protection: If a 403 error occurs, the request will automatically
             retry with content sanitization enabled. This prevents blocking when sending
             code diffs, file patches, or other content with patterns resembling attacks.
@@ -743,8 +755,12 @@ class LLM:
             - llm.get_last_recursion_depth(): How deep the tool call chain went
 
         Example:
-            # Regular usage
+            # Regular usage (streaming is used internally, returns complete response)
             response = llm.prompt("What's 2+2?")
+
+            # With structured output (streaming collects response, then parses)
+            llm = LLM(response_format=MyModel)
+            result = llm.prompt("Generate data")  # Returns MyModel instance
 
             # Streaming final response after tools
             result = llm.prompt("What's 2+2?", stream_final_response=True)
@@ -754,6 +770,12 @@ class LLM:
                 for chunk in result:  # Tools were used, streaming final response
                     print(chunk, end="", flush=True)
         """
+        # Determine if we should use streaming
+        # Use streaming by default UNLESS tools are enabled (tools don't support streaming)
+        use_streaming = not force_no_stream and not (
+            self.enable_tools and self.tool_manager.tools
+        )
+
         # Track metrics
         self.waf_metrics.total_requests += 1
 
@@ -796,19 +818,46 @@ class LLM:
                 if self.waf_config.debug_mode:
                     logger.debug(f"Prompting LLM with parameters: {params}")
                     logger.debug(f"Message count: {len(self.messages)}")
+                    logger.debug(f"Using streaming: {use_streaming}")
 
                 # Validate messages before sending
                 validated_messages = self._validate_messages_for_api(self.messages)
 
-                response = self.retry_handler.execute_with_retry(
-                    self.client.chat.completions.create,
-                    **params,
-                    messages=validated_messages,
-                )
+                if use_streaming:
+                    # Use streaming to prevent Heroku 408 timeouts
+                    # Collect full response, then process (including structured output)
+                    params["stream"] = True
 
-                result = self.process_response(
-                    response, stream_final_response=stream_final_response
-                )
+                    # Use retry handler for streaming requests too
+                    def streaming_request():
+                        stream = self.client.chat.completions.create(
+                            **params, messages=validated_messages
+                        )
+                        full_response = ""
+                        for chunk in stream:
+                            if chunk.choices and len(chunk.choices) > 0:
+                                delta = chunk.choices[0].delta
+                                if delta.content:
+                                    full_response += delta.content
+                        return full_response
+
+                    full_response = self.retry_handler.execute_with_retry(
+                        streaming_request
+                    )
+
+                    # Process the collected streaming response
+                    result = self._process_streaming_response(full_response)
+                else:
+                    # Non-streaming mode (for tools)
+                    response = self.retry_handler.execute_with_retry(
+                        self.client.chat.completions.create,
+                        **params,
+                        messages=validated_messages,
+                    )
+
+                    result = self.process_response(
+                        response, stream_final_response=stream_final_response
+                    )
 
                 # Store final metadata
                 self._last_response_metadata = {
@@ -1045,6 +1094,9 @@ class LLM:
         if last_error and waf_attempt >= self.waf_config.max_waf_retries:
             raise last_error
 
+    # Alias for prompt() - more intuitive for chat-based interactions
+    chat = prompt
+
     def retry_prompt(self, prompt: Optional[str] = None) -> Optional[str]:
         """
         Retry the last prompt.
@@ -1128,11 +1180,60 @@ class LLM:
         # Handle structured output
         if self.require_response_format:
             logger.info(f"Original message: {message}")
-            message = lm_json_utils.extract_strict_json(message)
-            logger.info(f"Parsed message: {message}")
-            return self.response_format.parse_raw(message)
+            json_message = lm_json_utils.extract_strict_json(message)
+            logger.info(f"Parsed message: {json_message}")
+            return self.response_format.model_validate_json(json_message)
 
         return response.choices[0].message.content
+
+    def _process_streaming_response(self, full_response: str) -> str:
+        """
+        Process a response collected from streaming.
+
+        This handles the same processing as process_response but for streamed content:
+        - Removes thinking tags
+        - Extracts response tags
+        - Checks max length
+        - Handles structured output (response_format)
+
+        Args:
+            full_response: The complete response text collected from streaming chunks
+
+        Returns:
+            Processed response text or structured output (Pydantic model instance)
+        """
+        if not full_response:
+            logger.warning("Received empty response from streaming")
+            return ""
+
+        message = full_response.strip()
+
+        # Remove thinking tags
+        message = re.sub(r"<think>.*?</think>", "", message, flags=re.DOTALL)
+
+        # Extract response tags if present
+        if "<response>" in message and "</response>" in message:
+            match = re.search(r"<response>(.*?)</response>", message, flags=re.DOTALL)
+            if match:
+                message = match.group(1)
+
+        # Check max length
+        if len(message) > self.max_length:
+            logger.warning(f"Max length exceeded: {len(message)} > {self.max_length}")
+            retry_result = self.retry_prompt()
+            if retry_result is not None:
+                return retry_result
+
+        self.add_message("assistant", message)
+
+        # Handle structured output
+        if self.require_response_format:
+            logger.info(f"Original message (streaming): {message}")
+            json_message = lm_json_utils.extract_strict_json(message)
+            logger.info(f"Parsed message (streaming): {json_message}")
+            return self.response_format.model_validate_json(json_message)
+
+        return message
 
     def _handle_tool_calls(
         self, message, original_response, recursion_depth=0, stream_final_response=False

@@ -10,6 +10,27 @@ from openai import APIConnectionError, APIStatusError, RateLimitError
 from floship_llm import LLM
 
 
+def create_mock_stream_response(content: str):
+    """Create a mock streaming response that yields chunks.
+
+    Args:
+        content: The full response content to stream in chunks
+
+    Returns:
+        A list of mock chunk objects that can be iterated over
+    """
+    chunks = []
+    for char in content:
+        mock_chunk = Mock()
+        mock_delta = Mock()
+        mock_delta.content = char
+        mock_choice = Mock()
+        mock_choice.delta = mock_delta
+        mock_chunk.choices = [mock_choice]
+        chunks.append(mock_chunk)
+    return chunks
+
+
 class TestAPIRetry:
     """Tests for the API retry mechanism."""
 
@@ -28,12 +49,9 @@ class TestAPIRetry:
         with patch("floship_llm.client.OpenAI") as mock_openai:
             llm = LLM()
 
-            mock_response = Mock()
-            mock_response.choices = [Mock()]
-            mock_response.choices[0].message.content = "Success"
-            mock_response.choices[0].message.tool_calls = None
-
-            mock_create = Mock(return_value=mock_response)
+            # Create mock streaming response
+            mock_stream = create_mock_stream_response("Success")
+            mock_create = Mock(return_value=mock_stream)
             mock_openai.return_value.chat.completions.create = mock_create
 
             result = llm.prompt("Test prompt")
@@ -70,10 +88,8 @@ class TestAPIRetry:
         with patch("floship_llm.client.OpenAI") as mock_openai:
             llm = LLM()
 
-            mock_response = Mock()
-            mock_response.choices = [Mock()]
-            mock_response.choices[0].message.content = "Success"
-            mock_response.choices[0].message.tool_calls = None
+            # Create mock streaming response
+            mock_stream = create_mock_stream_response("Success")
 
             call_count = 0
 
@@ -86,7 +102,7 @@ class TestAPIRetry:
                         response=Mock(status_code=429),
                         body={"error": "Rate limit exceeded"},
                     )
-                return mock_response
+                return mock_stream
 
             mock_openai.return_value.chat.completions.create = mock_create
 
@@ -101,10 +117,8 @@ class TestAPIRetry:
         with patch("floship_llm.client.OpenAI") as mock_openai:
             llm = LLM()
 
-            mock_response = Mock()
-            mock_response.choices = [Mock()]
-            mock_response.choices[0].message.content = "Success"
-            mock_response.choices[0].message.tool_calls = None
+            # Create mock streaming response
+            mock_stream = create_mock_stream_response("Success")
 
             call_count = 0
 
@@ -117,7 +131,7 @@ class TestAPIRetry:
                         response=Mock(status_code=500),
                         body={"error": "Internal server error"},
                     )
-                return mock_response
+                return mock_stream
 
             mock_openai.return_value.chat.completions.create = mock_create
 
@@ -132,10 +146,8 @@ class TestAPIRetry:
         with patch("floship_llm.client.OpenAI") as mock_openai:
             llm = LLM()
 
-            mock_response = Mock()
-            mock_response.choices = [Mock()]
-            mock_response.choices[0].message.content = "Success"
-            mock_response.choices[0].message.tool_calls = None
+            # Create mock streaming response
+            mock_stream = create_mock_stream_response("Success")
 
             call_count = 0
 
@@ -146,7 +158,7 @@ class TestAPIRetry:
                     raise APIConnectionError(
                         message="Connection failed", request=Mock()
                     )
-                return mock_response
+                return mock_stream
 
             mock_openai.return_value.chat.completions.create = mock_create
 
@@ -210,10 +222,8 @@ class TestAPIRetry:
         with patch("floship_llm.client.OpenAI") as mock_openai:
             llm = LLM()
 
-            mock_response = Mock()
-            mock_response.choices = [Mock()]
-            mock_response.choices[0].message.content = "Success"
-            mock_response.choices[0].message.tool_calls = None
+            # Create mock streaming response
+            mock_stream = create_mock_stream_response("Success")
 
             call_count = 0
 
@@ -226,7 +236,7 @@ class TestAPIRetry:
                         response=Mock(status_code=500),
                         body={"error": "Server error"},
                     )
-                return mock_response
+                return mock_stream
 
             mock_openai.return_value.chat.completions.create = mock_create
 
@@ -249,10 +259,8 @@ class TestAPIRetry:
             with patch("floship_llm.client.OpenAI") as mock_openai:
                 llm = LLM()
 
-                mock_response = Mock()
-                mock_response.choices = [Mock()]
-                mock_response.choices[0].message.content = "Success"
-                mock_response.choices[0].message.tool_calls = None
+                # Create mock streaming response
+                mock_stream = create_mock_stream_response("Success")
 
                 call_count = 0
 
@@ -265,7 +273,7 @@ class TestAPIRetry:
                             response=Mock(status_code=status_code),
                             body={"error": f"Error {status_code}"},
                         )
-                    return mock_response
+                    return mock_stream
 
                 mock_openai.return_value.chat.completions.create = mock_create
 
