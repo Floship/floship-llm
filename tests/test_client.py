@@ -241,7 +241,8 @@ class TestLLM:
 
             assert len(llm.messages) == 1
             assert llm.messages[0]["role"] == "user"
-            assert "JSON schema" in llm.messages[0]["content"]
+            # Check that JSON schema instructions are appended
+            assert "MUST respond with a valid JSON object" in llm.messages[0]["content"]
             assert "Test message" in llm.messages[0]["content"]
 
     def test_add_message_invalid_role(self):
@@ -1204,3 +1205,24 @@ class TestLLM:
                 mock_client.chat.completions.create.assert_called_once()
                 call_kwargs = mock_client.chat.completions.create.call_args[1]
                 assert call_kwargs.get("stream") is True
+
+    def test_get_last_raw_response(self):
+        """Test get_last_raw_response returns the raw LLM output."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            mock_client = mock_openai.return_value
+            raw_response = '{"name": "Test", "value": 42}'
+            mock_client.chat.completions.create.return_value = (
+                create_mock_stream_response(raw_response)
+            )
+
+            llm = LLM(continuous=False)
+            llm.prompt("Hello")
+
+            # After a prompt, we should be able to get the raw response
+            assert llm.get_last_raw_response() == raw_response
+
+    def test_get_last_raw_response_before_prompt(self):
+        """Test get_last_raw_response returns None before any prompt."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            assert llm.get_last_raw_response() is None

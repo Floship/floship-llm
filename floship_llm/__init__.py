@@ -3,7 +3,13 @@
 A reusable LLM client library for interacting with OpenAI-compatible inference endpoints.
 """
 
-from .client import LLM, CloudFrontWAFSanitizer, LLMConfig, LLMMetrics
+from .client import (
+    LLM,
+    CloudFrontWAFSanitizer,
+    LLMConfig,
+    LLMMetrics,
+    TruncatedResponseError,
+)
 from .content_processor import ContentProcessor
 from .retry_handler import RetryHandler
 from .schemas import (
@@ -27,6 +33,7 @@ __all__ = [
     "LLMConfig",
     "LLMMetrics",
     "CloudFrontWAFSanitizer",
+    "TruncatedResponseError",
     "ContentProcessor",
     "RetryHandler",
     "ToolCall",
@@ -45,18 +52,4 @@ __all__ = [
     "EmbeddingUsage",
 ]
 
-__version__ = "0.5.6"
-
-__all__ = [
-    "LLM",
-    "ThinkingModel",
-    "Suggestion",
-    "SuggestionsResponse",
-    "Labels",
-    "ToolParameter",
-    "ToolFunction",
-    "ToolCall",
-    "ToolResult",
-    "lm_json_utils",
-    "JSONUtils",
-]
+__version__ = "0.5.7"

@@ -314,6 +314,285 @@ class TestJSONUtils:
         parsed = json.loads(result)
         assert parsed == []
 
+    def test_extract_strict_json_from_markdown_code_block(self):
+        """Test extract_strict_json extracts JSON from markdown code blocks."""
+        utils = JSONUtils()
+
+        # JSON in markdown code block with json language tag
+        text = """Here is the response:
+```json
+{"name": "test", "value": 42}
+```
+That's the data."""
+        result = utils.extract_strict_json(text)
+        parsed = json.loads(result)
+        assert parsed == {"name": "test", "value": 42}
+
+    def test_extract_strict_json_from_markdown_code_block_no_language(self):
+        """Test extract_strict_json extracts JSON from markdown code blocks without language tag."""
+        utils = JSONUtils()
+
+        # JSON in markdown code block without language tag
+        text = """Here is the response:
+```
+{"items": ["a", "b", "c"]}
+```
+Done."""
+        result = utils.extract_strict_json(text)
+        parsed = json.loads(result)
+        assert parsed == {"items": ["a", "b", "c"]}
+
+    def test_extract_strict_json_prefers_code_block(self):
+        """Test that JSON in code blocks is preferred over surrounding text."""
+        utils = JSONUtils()
+
+        # Text has JSON outside code block and inside - prefer inside
+        text = """{"outside": "wrong"}
+```json
+{"inside": "correct"}
+```"""
+        result = utils.extract_strict_json(text)
+        parsed = json.loads(result)
+        assert parsed == {"inside": "correct"}
+
+    def test_extract_strict_json_nested_objects_returns_outermost(self):
+        """Test that nested JSON objects return the outermost object, not nested ones.
+
+        This is the critical bug fix - when the LLM returns a complex JSON with nested
+        objects like decision_tree, we need the full outer object, not just the first
+        nested object the regex finds.
+        """
+        utils = JSONUtils()
+
+        # This is what the LLM actually returns - a complex object with nested objects
+        text = """```json
+{
+  "summary": "Order fulfillment handling",
+  "branching_logic": "Check order status first",
+  "decision_tree": {
+    "root_question": "Is order shipped?",
+    "branches": [
+      {"condition": "yes", "action": "track shipment"}
+    ]
+  },
+  "common_problems": ["delayed shipping", "wrong address"],
+  "common_solutions": ["contact carrier", "update address"],
+  "escalation_triggers": ["customer angry"],
+  "denial_reasons": ["fraud detected"]
+}
+```"""
+        result = utils.extract_strict_json(text)
+        parsed = json.loads(result)
+
+        # Must return the OUTER object with all fields, not the nested decision_tree
+        assert "summary" in parsed
+        assert parsed["summary"] == "Order fulfillment handling"
+        assert "branching_logic" in parsed
+        assert "decision_tree" in parsed
+        assert "common_problems" in parsed
+        assert len(parsed["common_problems"]) == 2
+        assert "escalation_triggers" in parsed
+        assert "denial_reasons" in parsed
+
+    def test_extract_strict_json_deeply_nested_returns_outermost(self):
+        """Test deeply nested JSON still returns outermost object."""
+        utils = JSONUtils()
+
+        text = """```json
+{
+  "level1": "value1",
+  "nested": {
+    "level2": "value2",
+    "deeper": {
+      "level3": "value3"
+    }
+  }
+}
+```"""
+        result = utils.extract_strict_json(text)
+        parsed = json.loads(result)
+
+        assert parsed["level1"] == "value1"
+        assert "nested" in parsed
+        assert parsed["nested"]["level2"] == "value2"
+
+    def test_extract_strict_json_array_with_nested_objects(self):
+        """Test array containing nested objects returns full array."""
+        utils = JSONUtils()
+
+        text = """```json
+{
+  "items": [
+    {"id": 1, "name": "first"},
+    {"id": 2, "name": "second"}
+  ],
+  "total": 2
+}
+```"""
+        result = utils.extract_strict_json(text)
+        parsed = json.loads(result)
+
+        assert parsed["total"] == 2
+        assert len(parsed["items"]) == 2
+        assert parsed["items"][0]["id"] == 1
+
+    def test_extract_strict_json_no_code_block_nested_objects(self):
+        """Test nested JSON without code blocks returns outermost object.
+
+        This is the BUG case - when there's no markdown code block,
+        extract_and_fix_json might find nested objects first.
+        """
+        utils = JSONUtils()
+
+        # Raw JSON without code blocks (some LLMs return this)
+        text = """{
+  "summary": "Order fulfillment handling",
+  "decision_tree": {
+    "root_question": "Is order shipped?",
+    "branches": [{"condition": "yes", "action": "track"}]
+  },
+  "items": ["a", "b"]
+}"""
+        result = utils.extract_strict_json(text)
+        parsed = json.loads(result)
+
+        # Must return OUTER object, not the nested decision_tree
+        assert "summary" in parsed
+        assert parsed["summary"] == "Order fulfillment handling"
+        assert "decision_tree" in parsed
+        assert "items" in parsed
+
+    def test_extract_and_fix_json_returns_largest_object(self):
+        """Test that extract_and_fix_json returns objects sorted by size (largest first).
+
+        When multiple JSON objects are found, we want the largest (outermost) first.
+        """
+        utils = JSONUtils()
+
+        text = """{
+  "outer": "value",
+  "nested": {"inner": "data"}
+}"""
+        results = utils.extract_and_fix_json(text)
+
+        # Should find the outer object
+        assert len(results) >= 1
+        # The first result should be the largest/outermost object
+        assert "outer" in results[0]
+        assert "nested" in results[0]
+
+    def test_extract_strict_json_truncated_json_returns_empty(self):
+        """Test that truncated/incomplete JSON returns empty string rather than nested object.
+
+        This is the critical bug fix for max_completion_tokens truncation.
+        When the LLM response is cut off mid-JSON, extract_strict_json should NOT
+        return a nested object that happens to be complete - it should fail gracefully.
+        """
+        utils = JSONUtils()
+
+        # Simulates truncated response where outer JSON is incomplete but nested object is complete
+        # This is what happens when max_completion_tokens cuts off the response
+        truncated_json = """```json
+{
+  "summary": "Comprehensive branching logic system",
+  "branching_logic": "# Order Fulfillment Support",
+  "decision_tree": {
+    "root_question": "What is the order status?",
+    "branches": {"processing": {"action": "check"}}
+  },
+  "common_problems": ["Problem 1", "Prob"""  # Truncated mid-list!
+
+        result = utils.extract_strict_json(truncated_json)
+
+        # Should return empty string since the outer JSON is incomplete
+        # It should NOT return the nested decision_tree object
+        assert (
+            result == ""
+        ), f"Expected empty string for truncated JSON, got: {result[:100]}..."
+
+    def test_extract_strict_json_truncated_without_code_block(self):
+        """Test truncated JSON without code block also returns empty."""
+        utils = JSONUtils()
+
+        # Same scenario but without markdown code block
+        truncated_json = """{
+  "summary": "Test",
+  "nested": {"complete": "object"},
+  "list": ["item1", "ite"""  # Truncated!
+
+        result = utils.extract_strict_json(truncated_json)
+
+        # Should return empty since outer JSON is incomplete
+        assert (
+            result == ""
+        ), f"Expected empty string for truncated JSON, got: {result[:100]}..."
+
+    def test_is_truncated_json_unbalanced_braces(self):
+        """Test is_truncated_json detects unbalanced braces."""
+        utils = JSONUtils()
+
+        # Unbalanced braces
+        assert utils.is_truncated_json('{"key": "value"') is True
+        assert utils.is_truncated_json('{"outer": {"inner": "value"}') is True
+        assert utils.is_truncated_json('{"key": "value"}') is False
+
+    def test_is_truncated_json_unbalanced_brackets(self):
+        """Test is_truncated_json detects unbalanced brackets."""
+        utils = JSONUtils()
+
+        # Unbalanced brackets
+        assert utils.is_truncated_json('["item1", "item2"') is True
+        assert utils.is_truncated_json("[1, 2, [3, 4]") is True
+        assert utils.is_truncated_json('["item1", "item2"]') is False
+
+    def test_is_truncated_json_ends_with_comma(self):
+        """Test is_truncated_json detects JSON ending with comma."""
+        utils = JSONUtils()
+
+        # Ends with comma (incomplete)
+        assert utils.is_truncated_json('{"key": "value",') is True
+        assert utils.is_truncated_json('["item1",') is True
+
+    def test_is_truncated_json_ends_with_colon(self):
+        """Test is_truncated_json detects JSON ending with colon."""
+        utils = JSONUtils()
+
+        # Ends with colon (incomplete)
+        assert utils.is_truncated_json('{"key":') is True
+
+    def test_is_truncated_json_in_code_block(self):
+        """Test is_truncated_json detects truncation in markdown code blocks."""
+        utils = JSONUtils()
+
+        truncated = """```json
+{
+  "complete_nested": {"key": "value"},
+  "incomplete_list": ["item1", "ite
+```"""
+        # This should be detected as truncated because the list is incomplete
+        # (unbalanced brackets within the code block)
+        assert utils.is_truncated_json(truncated) is True
+
+        complete = """```json
+{"key": "value", "list": [1, 2, 3]}
+```"""
+        assert utils.is_truncated_json(complete) is False
+
+    def test_is_truncated_json_complete_json(self):
+        """Test is_truncated_json returns False for complete JSON."""
+        utils = JSONUtils()
+
+        complete_examples = [
+            '{"key": "value"}',
+            '["item1", "item2"]',
+            '{"nested": {"deep": "value"}}',
+            '{"list": [1, 2, {"inner": true}]}',
+        ]
+        for example in complete_examples:
+            assert (
+                utils.is_truncated_json(example) is False
+            ), f"Expected False for: {example}"
+
 
 class TestGlobalJSONUtilsInstance:
     """Test cases for the global lm_json_utils instance."""
@@ -370,7 +649,7 @@ class TestImportFallback:
         assert hasattr(re_module_fallback, "VERBOSE")
 
         # At least one import path should work
-        assert import_path_1_works or True  # re is always available
+        assert import_path_1_works  # regex is required
 
         # Test that the utils module works (it should use regex in this environment)
         utils = JSONUtils()

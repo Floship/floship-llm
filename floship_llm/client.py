@@ -25,6 +25,14 @@ def _str_to_bool(value: str) -> bool:
     return value.lower() in ("yes", "true", "t", "y", "1")
 
 
+class TruncatedResponseError(Exception):
+    """Raised when LLM response appears truncated (e.g., due to max_completion_tokens)."""
+
+    def __init__(self, message: str, raw_response: str = ""):
+        super().__init__(message, raw_response)
+        self.raw_response = raw_response
+
+
 @dataclass
 class LLMConfig:
     """Configuration for LLM client behavior."""
@@ -333,12 +341,25 @@ class LLM:
         self._current_tool_history = []
         self._last_response_metadata = {}
 
+        # Debug tracking - store last raw response for debugging
+        self._last_raw_response = None
+
         # Backward compatibility - maintain tools dict reference
         self.tools = self.tool_manager.tools
 
         # Add system message if provided
         if self.system:
             self.add_message("system", self.system)
+
+    def get_last_raw_response(self) -> str:
+        """Get the last raw response from the LLM before any processing.
+
+        Useful for debugging when structured output parsing fails.
+
+        Returns:
+            The last raw response string, or None if no response yet.
+        """
+        return self._last_raw_response
 
     def _validate_environment(self):
         """Validate required environment variables."""
@@ -470,12 +491,16 @@ class LLM:
         content = self._sanitize_messages(content)
 
         if self.require_response_format:
+            schema = json.dumps(self.response_format.model_json_schema(), indent=2)
             content = (
-                f"{content}\n"
-                f"Here is the JSON schema you need to follow for the response: "
-                f"{json.dumps(self.response_format.model_json_schema(), indent=2)}\n"
-                f"Do not return the entire schema, only the response in JSON format. "
-                f"Use the schema only as a guide for filling in.\n"
+                f"{content}\n\n"
+                f"IMPORTANT: You MUST respond with a valid JSON object that follows this schema:\n"
+                f"```json\n{schema}\n```\n\n"
+                f"Requirements:\n"
+                f"- Output ONLY the JSON object, no additional text before or after\n"
+                f"- Do not wrap in markdown code blocks\n"
+                f"- Fill in ALL required fields with meaningful values\n"
+                f"- Use the schema as a guide for the structure and types\n"
             )
 
         self.messages.append({"role": role, "content": content})
@@ -707,7 +732,7 @@ class LLM:
                 logger.error("CloudFront WAF blocked embedding request (403 error)")
             self.waf_metrics.failed_requests += 1
             raise
-        except Exception as e:
+        except Exception:
             self.waf_metrics.failed_requests += 1
             raise
 
@@ -803,133 +828,183 @@ class LLM:
                 self.add_message("system", system)
             self.add_message("user", prompt)
 
-        # Retry loop for CloudFront WAF 403 errors
-        last_error = None
-        for waf_attempt in range(self.waf_config.max_waf_retries + 1):
-            try:
-                if self.waf_config.debug_mode:
-                    logger.debug(
-                        f"Request attempt {waf_attempt + 1}/{self.waf_config.max_waf_retries + 1}"
-                    )
-                    if waf_attempt > 0:
-                        logger.debug("Retrying with forced sanitization")
+        # Truncation retry settings (for structured output with insufficient tokens)
+        max_truncation_retries = 2
+        current_max_tokens = self.max_completion_tokens
 
-                params = self.get_request_params()
-                if self.waf_config.debug_mode:
-                    logger.debug(f"Prompting LLM with parameters: {params}")
-                    logger.debug(f"Message count: {len(self.messages)}")
-                    logger.debug(f"Using streaming: {use_streaming}")
-
-                # Validate messages before sending
-                validated_messages = self._validate_messages_for_api(self.messages)
-
-                if use_streaming:
-                    # Use streaming to prevent Heroku 408 timeouts
-                    # Collect full response, then process (including structured output)
-                    params["stream"] = True
-
-                    # Use retry handler for streaming requests too
-                    def streaming_request():
-                        stream = self.client.chat.completions.create(
-                            **params, messages=validated_messages
+        for truncation_attempt in range(max_truncation_retries + 1):
+            # Retry loop for CloudFront WAF 403 errors
+            last_error = None
+            for waf_attempt in range(self.waf_config.max_waf_retries + 1):
+                try:
+                    if self.waf_config.debug_mode:
+                        logger.debug(
+                            f"Request attempt {waf_attempt + 1}/{self.waf_config.max_waf_retries + 1}"
                         )
-                        full_response = ""
-                        for chunk in stream:
-                            if chunk.choices and len(chunk.choices) > 0:
-                                delta = chunk.choices[0].delta
-                                if delta.content:
-                                    full_response += delta.content
-                        return full_response
+                        if waf_attempt > 0:
+                            logger.debug("Retrying with forced sanitization")
 
-                    full_response = self.retry_handler.execute_with_retry(
-                        streaming_request
-                    )
+                    params = self.get_request_params()
 
-                    # Process the collected streaming response
-                    result = self._process_streaming_response(full_response)
-                else:
-                    # Non-streaming mode (for tools)
-                    response = self.retry_handler.execute_with_retry(
-                        self.client.chat.completions.create,
-                        **params,
-                        messages=validated_messages,
-                    )
-
-                    result = self.process_response(
-                        response, stream_final_response=stream_final_response
-                    )
-
-                # Store final metadata
-                self._last_response_metadata = {
-                    "total_tool_calls": self._current_tool_call_count,
-                    "recursion_depth": self._current_recursion_depth,
-                    "tool_history": self._current_tool_history.copy(),
-                }
-
-                if not self.continuous:
-                    self.reset()
-
-                # Track successful retry
-                if waf_attempt > 0:
-                    self.waf_metrics.retry_successes += 1
-                    logger.info(
-                        f"CloudFront WAF: Retry successful after {waf_attempt} attempts"
-                    )
-
-                return result
-
-            except Exception as e:
-                last_error = e
-
-                # Check if it's a CloudFront 403 error
-                if (
-                    self._is_cloudfront_403(e)
-                    and waf_attempt < self.waf_config.max_waf_retries
-                ):
-                    self.waf_metrics.cloudfront_403_errors += 1
-                    wait_time = self.waf_config.retry_delay_base * (2**waf_attempt)
-
-                    logger.warning(
-                        f"CloudFront WAF 403 error (attempt {waf_attempt + 1}/"
-                        f"{self.waf_config.max_waf_retries + 1}). "
-                        f"Retrying in {wait_time}s with sanitization..."
-                    )
-
-                    # Wait before retry
-                    time.sleep(wait_time)
-
-                    # Force sanitization on retry if not already enabled
-                    if (
-                        not self.waf_config.enable_waf_sanitization
-                        and self.waf_config.retry_with_sanitization
-                    ):
-                        # Re-add messages with sanitization
-                        if not retry:
-                            # Clear last messages and re-add with sanitization
-                            if original_system:
-                                self.messages[-2]["content"] = self._sanitize_for_waf(
-                                    original_system
-                                )
-                            if original_prompt:
-                                self.messages[-1]["content"] = self._sanitize_for_waf(
-                                    original_prompt
-                                )
-
-                    continue
-                else:
-                    # Not a 403 error or out of retries
-                    if self._is_cloudfront_403(e):
-                        logger.error(
-                            f"CloudFront WAF: Failed after {self.waf_config.max_waf_retries + 1} attempts"
-                        )
-                    self.waf_metrics.failed_requests += 1
+                    # Override max_completion_tokens if we're retrying due to truncation
+                    if current_max_tokens is not None:
+                        params["max_completion_tokens"] = current_max_tokens
 
                     if self.waf_config.debug_mode:
-                        logger.error(
-                            f"Request failed: {type(e).__name__}: {str(e)[:200]}"
+                        logger.debug(f"Prompting LLM with parameters: {params}")
+                        logger.debug(f"Message count: {len(self.messages)}")
+                        logger.debug(f"Using streaming: {use_streaming}")
+
+                    # Validate messages before sending
+                    validated_messages = self._validate_messages_for_api(self.messages)
+
+                    if use_streaming:
+                        # Use streaming to prevent Heroku 408 timeouts
+                        # Collect full response, then process (including structured output)
+                        params["stream"] = True
+
+                        # Use retry handler for streaming requests too
+                        def streaming_request():
+                            stream = self.client.chat.completions.create(
+                                **params, messages=validated_messages
+                            )
+                            full_response = ""
+                            for chunk in stream:
+                                if chunk.choices and len(chunk.choices) > 0:
+                                    delta = chunk.choices[0].delta
+                                    if delta.content:
+                                        full_response += delta.content
+                            return full_response
+
+                        full_response = self.retry_handler.execute_with_retry(
+                            streaming_request
                         )
 
-                    raise
+                        # Process the collected streaming response
+                        result = self._process_streaming_response(full_response)
+                    else:
+                        # Non-streaming mode (for tools)
+                        response = self.retry_handler.execute_with_retry(
+                            self.client.chat.completions.create,
+                            **params,
+                            messages=validated_messages,
+                        )
+
+                        result = self.process_response(
+                            response, stream_final_response=stream_final_response
+                        )
+
+                    # Store final metadata
+                    self._last_response_metadata = {
+                        "total_tool_calls": self._current_tool_call_count,
+                        "recursion_depth": self._current_recursion_depth,
+                        "tool_history": self._current_tool_history.copy(),
+                    }
+
+                    if not self.continuous:
+                        self.reset()
+
+                    # Track successful retry
+                    if waf_attempt > 0:
+                        self.waf_metrics.retry_successes += 1
+                        logger.info(
+                            f"CloudFront WAF: Retry successful after {waf_attempt} attempts"
+                        )
+
+                    return result
+
+                except TruncatedResponseError:
+                    # Response was truncated - break out of WAF loop to retry with more tokens
+                    if truncation_attempt < max_truncation_retries:
+                        # Double the tokens for retry
+                        old_tokens = current_max_tokens
+                        if current_max_tokens is None:
+                            # Default to 4000 if not set
+                            current_max_tokens = 4000
+                        else:
+                            current_max_tokens = current_max_tokens * 2
+
+                        logger.warning(
+                            f"Truncated response detected (attempt {truncation_attempt + 1}/"
+                            f"{max_truncation_retries + 1}). "
+                            f"Retrying with max_completion_tokens: {old_tokens} -> {current_max_tokens}"
+                        )
+
+                        # Remove the last assistant message (the truncated one) before retrying
+                        if (
+                            self.messages
+                            and self.messages[-1].get("role") == "assistant"
+                        ):
+                            self.messages.pop()
+
+                        break  # Break out of WAF loop to retry with more tokens
+                    else:
+                        # Out of truncation retries
+                        logger.error(
+                            f"Response still truncated after {max_truncation_retries + 1} attempts "
+                            f"with max_completion_tokens={current_max_tokens}"
+                        )
+                        raise
+
+                except Exception as e:
+                    last_error = e
+
+                    # Check if it's a CloudFront 403 error
+                    if (
+                        self._is_cloudfront_403(e)
+                        and waf_attempt < self.waf_config.max_waf_retries
+                    ):
+                        self.waf_metrics.cloudfront_403_errors += 1
+                        wait_time = self.waf_config.retry_delay_base * (2**waf_attempt)
+
+                        logger.warning(
+                            f"CloudFront WAF 403 error (attempt {waf_attempt + 1}/"
+                            f"{self.waf_config.max_waf_retries + 1}). "
+                            f"Retrying in {wait_time}s with sanitization..."
+                        )
+
+                        # Wait before retry
+                        time.sleep(wait_time)
+
+                        # Force sanitization on retry if not already enabled
+                        if (
+                            not self.waf_config.enable_waf_sanitization
+                            and self.waf_config.retry_with_sanitization
+                        ):
+                            # Re-add messages with sanitization
+                            if not retry:
+                                # Clear last messages and re-add with sanitization
+                                if original_system:
+                                    self.messages[-2]["content"] = (
+                                        self._sanitize_for_waf(original_system)
+                                    )
+                                if original_prompt:
+                                    self.messages[-1]["content"] = (
+                                        self._sanitize_for_waf(original_prompt)
+                                    )
+
+                        continue
+                    else:
+                        # Not a 403 error or out of retries
+                        if self._is_cloudfront_403(e):
+                            logger.error(
+                                f"CloudFront WAF: Failed after {self.waf_config.max_waf_retries + 1} attempts"
+                            )
+                        self.waf_metrics.failed_requests += 1
+
+                        if self.waf_config.debug_mode:
+                            logger.error(
+                                f"Request failed: {type(e).__name__}: {str(e)[:200]}"
+                            )
+
+                        raise
+            else:
+                # WAF loop completed without break - either success (returned) or continue
+                # If we get here without returning, we exhausted WAF retries
+                if last_error:
+                    raise last_error
+                # If no error and didn't return, something is off - break to outer loop
+                break
 
         # This should never be reached, but just in case
         if last_error:
@@ -1208,6 +1283,14 @@ class LLM:
 
         message = full_response.strip()
 
+        # Store raw response for debugging
+        self._last_raw_response = message
+
+        if self.waf_config.debug_mode:
+            logger.debug(
+                f"Raw streaming response ({len(message)} chars): {message[:500]}..."
+            )
+
         # Remove thinking tags
         message = re.sub(r"<think>.*?</think>", "", message, flags=re.DOTALL)
 
@@ -1228,9 +1311,42 @@ class LLM:
 
         # Handle structured output
         if self.require_response_format:
-            logger.info(f"Original message (streaming): {message}")
+            if self.waf_config.debug_mode:
+                logger.debug(f"Attempting to parse as {self.response_format.__name__}")
+                logger.debug(f"Message to parse: {message}")
+
+            # Check for truncated JSON before attempting extraction
+            if lm_json_utils.is_truncated_json(message):
+                logger.warning(
+                    f"Detected truncated JSON response (likely max_completion_tokens too low). "
+                    f"Response ends with: ...{message[-100:]}"
+                )
+                raise TruncatedResponseError(
+                    "Response appears truncated - JSON is incomplete. "
+                    "Consider increasing max_completion_tokens.",
+                    raw_response=message,
+                )
+
             json_message = lm_json_utils.extract_strict_json(message)
-            logger.info(f"Parsed message (streaming): {json_message}")
+
+            if self.waf_config.debug_mode:
+                logger.debug(f"Extracted JSON: {json_message}")
+
+            if not json_message:
+                logger.warning(
+                    f"Failed to extract JSON from response. "
+                    f"Response was: {message[:500]}..."
+                )
+                # Return empty model with defaults rather than failing
+                try:
+                    return self.response_format()
+                except Exception as e:
+                    logger.error(f"Failed to create default model: {e}")
+                    raise ValueError(
+                        f"Could not extract valid JSON from LLM response. "
+                        f"Raw response: {message[:200]}..."
+                    )
+
             return self.response_format.model_validate_json(json_message)
 
         return message

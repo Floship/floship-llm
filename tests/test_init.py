@@ -29,12 +29,12 @@ class TestModuleImports:
     def test_version_is_string(self):
         """Test that __version__ is a string."""
         assert isinstance(__version__, str)
-        assert __version__ == "0.5.6"
+        assert __version__ == "0.5.7"
 
     def test_version_accessible_from_module(self):
         """Test that version is accessible from the main module."""
         assert hasattr(floship_llm, "__version__")
-        assert floship_llm.__version__ == "0.5.6"
+        assert floship_llm.__version__ == "0.5.7"
 
     def test_all_exports_defined(self):
         """Test that __all__ is properly defined."""
@@ -42,16 +42,26 @@ class TestModuleImports:
 
         expected_exports = [
             "LLM",
-            "ThinkingModel",
+            "LLMConfig",
+            "LLMMetrics",
+            "CloudFrontWAFSanitizer",
+            "TruncatedResponseError",
+            "ContentProcessor",
+            "RetryHandler",
+            "ToolCall",
+            "ToolFunction",
+            "ToolParameter",
+            "ToolResult",
+            "ToolManager",
+            "JSONUtils",
+            "lm_json_utils",
+            "Labels",
             "Suggestion",
             "SuggestionsResponse",
-            "Labels",
-            "ToolParameter",
-            "ToolFunction",
-            "ToolCall",
-            "ToolResult",
-            "lm_json_utils",
-            "JSONUtils",
+            "ThinkingModel",
+            "EmbeddingData",
+            "EmbeddingResponse",
+            "EmbeddingUsage",
         ]
 
         assert set(__all__) == set(expected_exports)

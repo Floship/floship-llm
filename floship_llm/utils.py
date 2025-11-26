@@ -69,11 +69,106 @@ class JSONUtils:
         params.update(dump_kwargs)
         return json.dumps(obj, **params)
 
+    def _is_likely_truncated(self, text: str) -> bool:
+        """
+        Check if text appears to be truncated JSON.
+
+        Truncated JSON typically:
+        - Has unbalanced braces/brackets
+        - Ends mid-string or mid-value
+        - Has more opening than closing delimiters
+        """
+        # Count braces and brackets
+        open_braces = text.count("{")
+        close_braces = text.count("}")
+        open_brackets = text.count("[")
+        close_brackets = text.count("]")
+
+        # If unbalanced, likely truncated
+        if open_braces != close_braces or open_brackets != close_brackets:
+            return True
+
+        # Check for common truncation patterns
+        stripped = text.rstrip()
+        if stripped:
+            # Ends with incomplete patterns
+            truncation_indicators = [
+                # Mid-string
+                stripped.endswith('"') and stripped.count('"') % 2 == 1,
+                # Mid-value (ends with comma, colon, or opening delimiter)
+                stripped[-1] in ",:[{",
+                # Ends with incomplete escape sequence
+                stripped.endswith("\\"),
+            ]
+            if any(truncation_indicators):
+                return True
+
+        return False
+
+    def is_truncated_json(self, text: str) -> bool:
+        """
+        Public method to check if text appears to be truncated JSON.
+
+        Useful for detecting when max_completion_tokens was too low
+        and the response was cut off mid-JSON.
+
+        Args:
+            text: The text to check (may include markdown code blocks)
+
+        Returns:
+            True if the text appears to contain truncated JSON
+        """
+        # Check markdown code blocks first
+        import re
+
+        code_block_pattern = r"```(?:json)?\s*([\s\S]*?)```"
+        code_blocks = re.findall(code_block_pattern, text)
+
+        for block in code_blocks:
+            if self._is_likely_truncated(block.strip()):
+                return True
+
+        # Also check the raw text for JSON-like content
+        if self._is_likely_truncated(text):
+            return True
+
+        return False
+
     def extract_strict_json(self, text: str) -> str:
         """
         Extract the first valid JSON object from the text.
         Returns a JSON string or an empty string if no valid JSON is found.
+
+        Handles:
+        - Raw JSON objects/arrays
+        - JSON wrapped in markdown code blocks (```json ... ```)
+        - JSON with leading/trailing text
+        - Truncated JSON (returns empty rather than nested object)
         """
+        # First, try to extract from markdown code blocks
+        import re
+
+        code_block_pattern = r"```(?:json)?\s*([\s\S]*?)```"
+        code_blocks = re.findall(code_block_pattern, text)
+
+        # Try code blocks first
+        for block in code_blocks:
+            block_text = block.strip()
+
+            # Check if the block content appears truncated
+            if self._is_likely_truncated(block_text):
+                # Don't extract from truncated JSON - return empty
+                return ""
+
+            results = self.extract_and_fix_json(block_text)
+            if results:
+                return self.strict_json(results[0])
+
+        # Fall back to searching the entire text
+        # Check for truncation first
+        if self._is_likely_truncated(text):
+            return ""
+
         results = self.extract_and_fix_json(text)
         if results:
             return self.strict_json(results[0])
