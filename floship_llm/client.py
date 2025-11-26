@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from .content_processor import ContentProcessor
 from .retry_handler import RetryHandler
 from .schemas import ToolCall, ToolFunction, ToolResult
-from .tool_manager import ToolManager
+from .tool_manager import TOOL_NAME_PATTERN, ToolManager
 from .utils import lm_json_utils
 
 logger = logging.getLogger(__name__)
@@ -508,6 +508,31 @@ class LLM:
     def _sanitize_messages(self, content: str) -> str:
         """Remove excessive whitespace from messages."""
         return self.content_processor.sanitize_messages(content)
+
+    def _sanitize_tool_name_for_api(self, name: str) -> Tuple[str, bool]:
+        """
+        Ensure tool names comply with API regex requirements.
+
+        Returns sanitized name and whether it was changed.
+        """
+        raw_name = "" if name is None else str(name)
+
+        if TOOL_NAME_PATTERN.match(raw_name):
+            return raw_name, False
+
+        sanitized = re.sub(r"[^a-zA-Z0-9_-]", "_", raw_name)
+        sanitized = re.sub(r"_+", "_", sanitized).strip("_")
+
+        if not sanitized:
+            sanitized = f"tool_{abs(hash(raw_name)) % 10000}"
+
+        logger.warning(
+            "Invalid tool name '%s' detected; sanitized to '%s' to satisfy API requirements.",
+            raw_name,
+            sanitized,
+        )
+
+        return sanitized, True
 
     def reset(self):
         """Reset conversation history and retry counter."""
@@ -1683,6 +1708,43 @@ class LLM:
                     if (role == "assistant" and "tool_calls" in validated_msg)
                     else "."
                 )
+
+            # Sanitize tool call names to comply with API regex validation
+            if "tool_calls" in validated_msg:
+                tool_calls = validated_msg.get("tool_calls")
+                if isinstance(tool_calls, list):
+                    sanitized_tool_calls = []
+                    for tc_index, tc in enumerate(tool_calls):
+                        if not isinstance(tc, dict):
+                            logger.warning(
+                                "Skipping invalid tool_call at message %d index %d: %s",
+                                i,
+                                tc_index,
+                                type(tc),
+                            )
+                            continue
+
+                        sanitized_tc = dict(tc)
+                        if (
+                            sanitized_tc.get("type") == "function"
+                            and "function" in sanitized_tc
+                        ):
+                            func = dict(sanitized_tc.get("function") or {})
+                            name = func.get("name")
+                            safe_name, _ = self._sanitize_tool_name_for_api(name)
+                            func["name"] = safe_name
+                            sanitized_tc["function"] = func
+
+                        sanitized_tool_calls.append(sanitized_tc)
+
+                    validated_msg["tool_calls"] = sanitized_tool_calls
+                else:
+                    logger.warning(
+                        "tool_calls for message %d is not a list (found %s); dropping invalid value",
+                        i,
+                        type(tool_calls),
+                    )
+                    validated_msg["tool_calls"] = []
 
             validated_messages.append(validated_msg)
 

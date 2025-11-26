@@ -2,12 +2,16 @@
 
 import json
 import logging
+import re
 import time
 from typing import Any, Callable, Dict, List, Optional
 
 from .schemas import ToolCall, ToolFunction, ToolResult
 
 logger = logging.getLogger(__name__)
+
+# Tool names must follow the OpenAI/Bedrock regex constraints
+TOOL_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 
 
 class ToolManager:
@@ -29,6 +33,12 @@ class ToolManager:
         """
         if not isinstance(tool, ToolFunction):
             raise ValueError("tool must be an instance of ToolFunction")
+
+        if not TOOL_NAME_PATTERN.match(tool.name):
+            raise ValueError(
+                f"Invalid tool name '{tool.name}'. Tool names must match pattern "
+                "[a-zA-Z0-9_-]+ to satisfy API requirements."
+            )
 
         if tool.name in self.tools:
             raise ValueError(f"Tool '{tool.name}' already exists")
@@ -159,7 +169,16 @@ class ToolManager:
 
         tool = self.get_tool(tool_call.name)
         if not tool:
-            error_msg = f"Tool '{tool_call.name}' not found"
+            available_tools = list(self.tools.keys())
+            if available_tools:
+                error_msg = (
+                    f"Tool '{tool_call.name}' not found. "
+                    f"Available tools: {', '.join(available_tools)}"
+                )
+            else:
+                error_msg = (
+                    f"Tool '{tool_call.name}' not found. No tools are registered."
+                )
             logger.error(error_msg)
             return ToolResult(
                 tool_call_id=tool_call.id,
@@ -273,4 +292,17 @@ class ToolManager:
         Returns:
             List of tool schemas in OpenAI format (JSON-serializable)
         """
-        return [tool.to_openai_format() for tool in self.tools.values()]
+        schemas: List[Dict] = []
+
+        for tool in self.tools.values():
+            if not TOOL_NAME_PATTERN.match(tool.name):
+                logger.warning(
+                    "Skipping tool '%s' because its name is not API-safe "
+                    "(must match [a-zA-Z0-9_-]+).",
+                    tool.name,
+                )
+                continue
+
+            schemas.append(tool.to_openai_format())
+
+        return schemas

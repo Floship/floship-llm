@@ -305,6 +305,37 @@ class TestLLMTools:
             assert "not found" in result.content.lower()
             assert result.error is not None
 
+    def test_execute_tool_not_found_shows_available_tools(self):
+        """Test that error message shows available tools when tool not found."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            llm = LLM()
+
+            # Register some tools
+            tool1 = ToolFunction(
+                name="tool_one",
+                description="First tool",
+                parameters=[],
+                function=lambda: "one",
+            )
+            tool2 = ToolFunction(
+                name="tool_two",
+                description="Second tool",
+                parameters=[],
+                function=lambda: "two",
+            )
+            llm.add_tool(tool1)
+            llm.add_tool(tool2)
+
+            # Try to execute a non-existent tool
+            tool_call = ToolCall(id="call_123", name="wrong_tool", arguments={})
+            result = llm.execute_tool(tool_call)
+
+            assert result.success is False
+            assert "not found" in result.content.lower()
+            assert "available tools" in result.content.lower()
+            assert "tool_one" in result.content
+            assert "tool_two" in result.content
+
     def test_execute_tool_function_error(self):
         """Test tool execution with function error."""
         with patch("floship_llm.client.OpenAI") as mock_openai:
