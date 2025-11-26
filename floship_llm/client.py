@@ -105,7 +105,28 @@ class CloudFrontWAFSanitizer:
     """
 
     # Patterns that trigger CloudFront WAF
+    # NOTE: Order matters! More specific patterns should come before general ones
     BLOCKERS = {
+        # Process traceback patterns FIRST (before general XSS patterns catch them)
+        "traceback_script": [
+            # Python traceback File "<script>" pattern triggers XSS detection
+            (r'File "<script>"', 'File "[SCRIPT_FILE]"'),
+            (r'File "<string>"', 'File "[STRING_FILE]"'),
+            (r'File "<stdin>"', 'File "[STDIN_FILE]"'),
+        ],
+        "code_execution": [
+            # Python exec() in tracebacks - looks like code execution attack
+            (r"exec\(compiled,", "ex3c(compiled,"),
+            (r"exec\(code,", "ex3c(code,"),
+            # Generic exec( that might trigger WAF
+            (r'(?<!")exec\(', "ex3c("),
+        ],
+        "template_injection": [
+            # Double curly braces at end of JSON (tool call arguments)
+            # Pattern: }"}} or similar at end of tool calls
+            (r'\}"\}\}', '}"}[TEMPLATE_CLOSE]'),
+            (r"\}\}\]", ")[TEMPLATE_CLOSE]"),
+        ],
         "path_traversal": [
             (r"\.\./", "[PARENT_DIR]/"),
             (r"\.\.[/\\]", "[PARENT_DIR]/"),
@@ -141,6 +162,25 @@ class CloudFrontWAFSanitizer:
         ],
     }
 
+    # Reverse mappings for desanitization (restore original content from LLM responses)
+    REVERSE_MAPPINGS = {
+        "[SCRIPT_FILE]": "<script>",
+        "[STRING_FILE]": "<string>",
+        "[STDIN_FILE]": "<stdin>",
+        "ex3c(": "exec(",
+        "[TEMPLATE_CLOSE]": "}}",
+        "[PARENT_DIR]/": "../",
+        "[SCRIPT_TAG]": "<script>",
+        "[/SCRIPT_TAG]": "</script>",
+        "[IFRAME_TAG]": "<iframe>",
+        "[/IFRAME_TAG]": "</iframe>",
+        "js:": "javascript:",
+        "on_error=": "onerror=",
+        "on_load=": "onload=",
+        "[URL_TEMPLATE]": "{/...}",
+        "filter_Q(": "filter=Q(",
+    }
+
     @classmethod
     def sanitize(cls, content: str, aggressive: bool = False) -> Tuple[str, bool]:
         """
@@ -165,6 +205,31 @@ class CloudFrontWAFSanitizer:
                     was_sanitized = True
 
         return sanitized, was_sanitized
+
+    @classmethod
+    def desanitize(cls, content: str) -> Tuple[str, bool]:
+        """
+        Restore original content from sanitized LLM responses.
+
+        This reverses the sanitization applied before sending to the API,
+        restoring patterns like exec(), <script>, etc. that the LLM may
+        have included in its response (e.g., in code examples or tracebacks).
+
+        Args:
+            content: Sanitized content from LLM response
+
+        Returns:
+            Tuple of (desanitized_content, was_desanitized)
+        """
+        desanitized = content
+        was_desanitized = False
+
+        for sanitized_pattern, original in cls.REVERSE_MAPPINGS.items():
+            if sanitized_pattern in desanitized:
+                desanitized = desanitized.replace(sanitized_pattern, original)
+                was_desanitized = True
+
+        return desanitized, was_desanitized
 
     @classmethod
     def check_for_blockers(cls, content: str) -> List[Tuple[str, str]]:
@@ -814,6 +879,11 @@ class LLM:
             if self._is_cloudfront_403(e):
                 self.waf_metrics.cloudfront_403_errors += 1
                 logger.error("CloudFront WAF blocked embedding request (403 error)")
+                # Log the input that triggered the block
+                input_preview = str(input)[:500] if input else "None"
+                logger.error(
+                    f"Embedding input that triggered WAF block: {input_preview}..."
+                )
             self.waf_metrics.failed_requests += 1
             raise
         except Exception:
@@ -1631,10 +1701,19 @@ class LLM:
             # Enable streaming for the follow-up request
             params["stream"] = True
 
-            # Make streaming request
-            stream = self.client.chat.completions.create(
-                **params, messages=validated_messages
-            )
+            # Make streaming request with WAF error handling
+            try:
+                stream = self.client.chat.completions.create(
+                    **params, messages=validated_messages
+                )
+            except PermissionDeniedError as e:
+                if self._is_cloudfront_403(e):
+                    self.waf_metrics.cloudfront_403_errors += 1
+                    self._log_waf_blocked_content(
+                        self.messages, "(_handle_tool_calls streaming)"
+                    )
+                self.waf_metrics.failed_requests += 1
+                raise
 
             # Check first chunk to see if there are more tool calls
             first_chunk = next(stream, None)
@@ -1649,11 +1728,20 @@ class LLM:
                         "Recursive tool calls detected, falling back to non-streaming"
                     )
                     params["stream"] = False
-                    follow_up_response = self.retry_handler.execute_with_retry(
-                        self.client.chat.completions.create,
-                        **params,
-                        messages=validated_messages,
-                    )
+                    try:
+                        follow_up_response = self.retry_handler.execute_with_retry(
+                            self.client.chat.completions.create,
+                            **params,
+                            messages=validated_messages,
+                        )
+                    except PermissionDeniedError as e:
+                        if self._is_cloudfront_403(e):
+                            self.waf_metrics.cloudfront_403_errors += 1
+                            self._log_waf_blocked_content(
+                                self.messages, "(_handle_tool_calls recursive fallback)"
+                            )
+                        self.waf_metrics.failed_requests += 1
+                        raise
                     return self._handle_tool_calls(
                         follow_up_response.choices[0].message,
                         follow_up_response,
@@ -1690,11 +1778,20 @@ class LLM:
                 return ""
         else:
             # Non-streaming follow-up (original behavior)
-            follow_up_response = self.retry_handler.execute_with_retry(
-                self.client.chat.completions.create,
-                **params,
-                messages=validated_messages,
-            )
+            try:
+                follow_up_response = self.retry_handler.execute_with_retry(
+                    self.client.chat.completions.create,
+                    **params,
+                    messages=validated_messages,
+                )
+            except PermissionDeniedError as e:
+                if self._is_cloudfront_403(e):
+                    self.waf_metrics.cloudfront_403_errors += 1
+                    self._log_waf_blocked_content(
+                        self.messages, "(_handle_tool_calls non-streaming)"
+                    )
+                self.waf_metrics.failed_requests += 1
+                raise
 
             # Check if follow-up has more tool calls (recursive case)
             if (

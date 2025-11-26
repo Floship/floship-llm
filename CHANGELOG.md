@@ -7,6 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.10] - 2025-11-27
+
+### Added
+- **CloudFront WAF Python Execution Patterns:** Added sanitization for Python execution patterns that trigger WAF when using Python execution tools:
+  - `exec()` in tracebacks → `ex3c()` (code execution detection)
+  - `File "<script>"` in tracebacks → `File "[SCRIPT_FILE]"` (XSS detection)
+  - `File "<string>"` → `File "[STRING_FILE]"`
+  - `File "<stdin>"` → `File "[STDIN_FILE]"`
+  - JSON template closing `}}}` → `[TEMPLATE_CLOSE]`
+- **Desanitize Method:** New `CloudFrontWAFSanitizer.desanitize()` method to restore original content from LLM responses, enabling round-trip sanitization for Python execution tool output
+- **WAF Exception Handling:** Added WAF 403 logging to `_handle_tool_calls()` streaming and non-streaming paths
+- **Improved WAF Logging:** Enhanced embedding request WAF logging to include input preview
+
+### Fixed
+- **Pattern Order:** Reordered WAF sanitization patterns so specific patterns (traceback files) are processed before general patterns (XSS)
+
+## [0.5.9] - 2025-11-26
+
+### Added
+- **CloudFront WAF Block Logging:** Added detailed logging when CloudFront WAF blocks requests
+  - New `_log_waf_blocked_content()` method logs message analysis when 403 errors occur
+  - Logs detected WAF blocker patterns for debugging
+  - Shows message previews (truncated to 500 chars) for troubleshooting
+
+## [0.5.8] - 2025-11-26
+
+### Fixed
+- **Invalid Tool Name Handling:** Tool names with invalid characters (like `$PYTHON_EXECUTOR`) are now sanitized to valid format (`_PYTHON_EXECUTOR`)
+- **Improved Tool Not Found Error:** Error messages now include list of available tools for easier debugging
+
+## [0.5.7] - 2025-11-26
+
+### Added
+- **Truncated JSON Detection:** Automatically detects when LLM responses are truncated due to `max_completion_tokens` limit
+- **Auto-Retry with Increased Tokens:** When truncation is detected, automatically retries with 2x tokens (up to 2 retries)
+- **TruncatedResponseError:** New exception class for truncated response handling
+
 ## [0.5.4] - 2025-11-13
 
 ### Fixed

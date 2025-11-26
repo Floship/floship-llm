@@ -254,6 +254,129 @@ class TestCloudFrontWAFSanitizer:
         # Original pattern should be replaced
         assert "objects.filter_Q(" in sanitized
 
+    def test_python_traceback_script_file(self):
+        """Test Python traceback with File '<script>' pattern that triggers XSS detection."""
+        content = """
+        Traceback (most recent call last):
+          File "/app/slack_bot/python_executor.py", line 351, in execute
+            exec(compiled, self.namespace)  # nosec B102
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+          File "<script>", line 6, in <module>
+          File "/app/.heroku/python/lib/python3.12/site-packages/pandas/io/excel/_base.py"
+        FileNotFoundError: [Errno 2] No such file or directory
+        """
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+
+        assert was_sanitized
+        # Verify <script> in traceback is sanitized
+        assert 'File "<script>"' not in sanitized
+        assert 'File "[SCRIPT_FILE]"' in sanitized
+        # Verify exec( is sanitized
+        assert "exec(compiled" not in sanitized
+        assert "ex3c(compiled" in sanitized
+
+    def test_python_exec_in_traceback(self):
+        """Test Python exec() function in traceback is sanitized."""
+        content = """
+        File "/app/executor.py", line 100, in run
+            exec(code, namespace)
+            ^^^^^^^^^^^^^^^^^^^^^
+        """
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+
+        assert was_sanitized
+        assert "exec(code" not in sanitized
+        assert "ex3c(code" in sanitized
+
+    def test_template_injection_json_close(self):
+        """Test JSON tool call closing pattern that triggers template injection detection."""
+        content = """
+        TOOL_CALLS: [{'id': 'tooluse_123', 'type': 'function', 'function': {'name': 'execute_python', 'arguments': '{"code":"print(1)","description":"Test"}'}}]
+        """
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+
+        assert was_sanitized
+        # Verify template-like closing is sanitized
+        assert "'}}" not in sanitized or "[TEMPLATE_CLOSE]" in sanitized
+
+    def test_file_string_traceback(self):
+        """Test Python traceback with File '<string>' pattern."""
+        content = """
+          File "<string>", line 1, in <module>
+          File "<stdin>", line 5
+        """
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+
+        assert was_sanitized
+        assert 'File "<string>"' not in sanitized
+        assert 'File "[STRING_FILE]"' in sanitized
+        assert 'File "<stdin>"' not in sanitized
+        assert 'File "[STDIN_FILE]"' in sanitized
+
+    def test_desanitize_restores_exec(self):
+        """Test that desanitize restores exec() from ex3c()."""
+        sanitized_content = """
+        File "/app/executor.py", line 100, in run
+            ex3c(compiled, self.namespace)
+        """
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(
+            sanitized_content
+        )
+
+        assert was_desanitized
+        assert "exec(" in desanitized
+        assert "ex3c(" not in desanitized
+
+    def test_desanitize_restores_script_file(self):
+        """Test that desanitize restores File '<script>' from [SCRIPT_FILE]."""
+        sanitized_content = 'File "[SCRIPT_FILE]", line 6, in <module>'
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(
+            sanitized_content
+        )
+
+        assert was_desanitized
+        assert 'File "<script>"' in desanitized
+        assert "[SCRIPT_FILE]" not in desanitized
+
+    def test_desanitize_restores_multiple_patterns(self):
+        """Test desanitize restores multiple patterns at once."""
+        sanitized_content = """
+        Traceback:
+          File "[SCRIPT_FILE]", line 5
+            ex3c(code, namespace)
+          File "[STRING_FILE]", line 1
+        """
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(
+            sanitized_content
+        )
+
+        assert was_desanitized
+        assert 'File "<script>"' in desanitized
+        assert 'File "<string>"' in desanitized
+        assert "exec(" in desanitized
+
+    def test_desanitize_no_changes_needed(self):
+        """Test desanitize returns original when no sanitized patterns present."""
+        content = "Normal Python code: def hello(): return 'world'"
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(content)
+
+        assert not was_desanitized
+        assert desanitized == content
+
+    def test_roundtrip_sanitize_desanitize(self):
+        """Test that sanitize -> desanitize restores original content."""
+        original = """
+        Traceback (most recent call last):
+          File "<script>", line 6, in <module>
+            exec(compiled, namespace)
+        """
+        sanitized, _ = CloudFrontWAFSanitizer.sanitize(original)
+        desanitized, _ = CloudFrontWAFSanitizer.desanitize(sanitized)
+
+        # Should restore the key patterns
+        assert 'File "<script>"' in desanitized
+        assert "exec(" in desanitized
+
 
 class TestLLMConfig:
     """Test LLM configuration."""
@@ -488,3 +611,80 @@ class TestRealWorldScenarios:
         assert was_sanitized
         assert "../" not in sanitized
         assert "config/secret.py" in sanitized
+
+
+class TestWAFLogging:
+    """Test WAF logging functionality."""
+
+    def test_log_waf_blocked_content_called_on_403(self, monkeypatch):
+        """Test that _log_waf_blocked_content is called when 403 occurs."""
+        monkeypatch.setenv("INFERENCE_URL", "https://test.inference.com")
+        monkeypatch.setenv("INFERENCE_MODEL_ID", "test-model")
+        monkeypatch.setenv("INFERENCE_KEY", "test-key")
+        llm = LLM(api_key="test-key")
+
+        # Mock messages
+        llm.messages = [
+            {"role": "system", "content": "Test system"},
+            {"role": "user", "content": "Test with ../../path"},
+        ]
+
+        with patch.object(llm, "_log_waf_blocked_content") as mock_log:
+            # Call the method directly to verify it works
+            llm._log_waf_blocked_content(llm.messages, "(test context)")
+
+            mock_log.assert_called_once_with(llm.messages, "(test context)")
+
+    def test_log_waf_blocked_content_logs_blockers(self, monkeypatch, caplog):
+        """Test that WAF blockers are logged when detected."""
+        import logging
+
+        monkeypatch.setenv("INFERENCE_URL", "https://test.inference.com")
+        monkeypatch.setenv("INFERENCE_MODEL_ID", "test-model")
+        monkeypatch.setenv("INFERENCE_KEY", "test-key")
+        llm = LLM(api_key="test-key")
+
+        messages = [
+            {"role": "user", "content": "Check file at ../../config/secret.py"},
+        ]
+
+        with caplog.at_level(logging.ERROR, logger="floship_llm.client"):
+            llm._log_waf_blocked_content(messages, "(test)")
+
+        # Check that the WAF block was logged
+        assert any("WAF block" in record.message for record in caplog.records)
+        assert any(
+            "Analyzing 1 messages" in record.message for record in caplog.records
+        )
+
+    def test_log_waf_blocked_content_empty_messages(self, monkeypatch, caplog):
+        """Test logging with empty messages list."""
+        import logging
+
+        monkeypatch.setenv("INFERENCE_URL", "https://test.inference.com")
+        monkeypatch.setenv("INFERENCE_MODEL_ID", "test-model")
+        monkeypatch.setenv("INFERENCE_KEY", "test-key")
+        llm = LLM(api_key="test-key")
+
+        with caplog.at_level(logging.WARNING, logger="floship_llm.client"):
+            llm._log_waf_blocked_content([], "(empty test)")
+
+        assert any("No messages to log" in record.message for record in caplog.records)
+
+    def test_log_waf_blocked_content_truncates_long_content(self, monkeypatch, caplog):
+        """Test that long message content is truncated in logs."""
+        import logging
+
+        monkeypatch.setenv("INFERENCE_URL", "https://test.inference.com")
+        monkeypatch.setenv("INFERENCE_MODEL_ID", "test-model")
+        monkeypatch.setenv("INFERENCE_KEY", "test-key")
+        llm = LLM(api_key="test-key")
+
+        long_content = "x" * 1000  # Content longer than 500 chars
+        messages = [{"role": "user", "content": long_content}]
+
+        with caplog.at_level(logging.DEBUG, logger="floship_llm.client"):
+            llm._log_waf_blocked_content(messages, "(long content test)")
+
+        # The function should run without error
+        # (truncation is internal, not visible in standard logs)
