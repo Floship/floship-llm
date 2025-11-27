@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from openai import InternalServerError, OpenAI, PermissionDeniedError
+from openai import APIStatusError, InternalServerError, OpenAI, PermissionDeniedError
 from pydantic import BaseModel
 
 from .content_processor import ContentProcessor
@@ -1939,68 +1939,77 @@ class LLM:
                     **params,
                     messages=validated_messages,
                 )
-            except InternalServerError:
-                logger.warning(
-                    "Internal Server Error detected after tool execution. "
-                    "Attempting to recover by simplifying tool outputs."
-                )
-
-                # Check if we have tool messages to simplify
-                modified = False
-                # Only look at the most recent messages (likely the tool outputs causing the issue)
-                # We iterate backwards until we find a non-tool message
-                for i in range(len(self.messages) - 1, -1, -1):
-                    msg = self.messages[i]
-                    if msg.get("role") == "tool":
-                        # Replace content with a simplified message
-                        original_len = len(str(msg.get("content", "")))
-                        msg["content"] = (
-                            "Tool execution succeeded, but output was truncated due to server error. "
-                            "Please proceed based on the fact that the tool ran successfully."
-                        )
-                        logger.info(
-                            f"Truncated tool message {i} (original len: {original_len}) due to 500 error"
-                        )
-                        modified = True
-                    else:
-                        # Stop if we hit a non-tool message (e.g., the assistant message that called the tools)
-                        break
-
-                if modified:
-                    # Re-validate messages
-                    validated_messages = self._validate_messages_for_api(self.messages)
-
-                    # Retry once with simplified context
-                    try:
-                        follow_up_response = self.retry_handler.execute_with_retry(
-                            self.client.chat.completions.create,
-                            **params,
-                            messages=validated_messages,
-                        )
-                    except Exception as e:
-                        logger.error(f"Recovery attempt failed: {e}")
-                        raise
-                else:
-                    # No tool messages found to simplify, re-raise
-                    raise
-
-            except PermissionDeniedError as e:
-                context = "_handle_tool_calls non-streaming"
-                if self._is_cloudfront_403(e):
-                    self.waf_metrics.cloudfront_403_errors += 1
-                    detected_blockers = self._log_waf_blocked_content(
-                        self.messages, context
+            except APIStatusError as e:
+                # Handle 500 Internal Server Error
+                if e.status_code == 500:
+                    logger.warning(
+                        "Internal Server Error detected after tool execution. "
+                        "Attempting to recover by simplifying tool outputs."
                     )
+
+                    # Check if we have tool messages to simplify
+                    modified = False
+                    # Only look at the most recent messages (likely the tool outputs causing the issue)
+                    # We iterate backwards until we find a non-tool message
+                    for i in range(len(self.messages) - 1, -1, -1):
+                        msg = self.messages[i]
+                        if msg.get("role") == "tool":
+                            # Replace content with a simplified message
+                            original_len = len(str(msg.get("content", "")))
+                            msg["content"] = (
+                                "Tool execution succeeded, but output was truncated due to server error. "
+                                "Please proceed based on the fact that the tool ran successfully."
+                            )
+                            logger.info(
+                                f"Truncated tool message {i} (original len: {original_len}) due to 500 error"
+                            )
+                            modified = True
+                        else:
+                            # Stop if we hit a non-tool message (e.g., the assistant message that called the tools)
+                            break
+
+                    if modified:
+                        # Re-validate messages
+                        validated_messages = self._validate_messages_for_api(
+                            self.messages
+                        )
+
+                        # Retry once with simplified context
+                        try:
+                            follow_up_response = self.retry_handler.execute_with_retry(
+                                self.client.chat.completions.create,
+                                **params,
+                                messages=validated_messages,
+                            )
+                        except Exception as retry_error:
+                            logger.error(f"Recovery attempt failed: {retry_error}")
+                            raise e  # Raise original 500 error if recovery fails
+                    else:
+                        # No tool messages found to simplify, re-raise
+                        raise e
+
+                # Handle 403 CloudFront WAF Error
+                elif e.status_code == 403:
+                    context = "_handle_tool_calls non-streaming"
+                    if self._is_cloudfront_403(e):
+                        self.waf_metrics.cloudfront_403_errors += 1
+                        detected_blockers = self._log_waf_blocked_content(
+                            self.messages, context
+                        )
+                        self.waf_metrics.failed_requests += 1
+                        raise CloudFrontWAFError(
+                            message=f"CloudFront WAF blocked request in {context}",
+                            messages=self.messages.copy(),
+                            detected_blockers=detected_blockers,
+                            context=context,
+                            original_error=e,
+                        ) from e
                     self.waf_metrics.failed_requests += 1
-                    raise CloudFrontWAFError(
-                        message=f"CloudFront WAF blocked request in {context}",
-                        messages=self.messages.copy(),
-                        detected_blockers=detected_blockers,
-                        context=context,
-                        original_error=e,
-                    ) from e
-                self.waf_metrics.failed_requests += 1
-                raise
+                    raise e
+
+                # Re-raise other errors
+                else:
+                    raise e
 
             # Check if follow-up has more tool calls (recursive case)
             if (
