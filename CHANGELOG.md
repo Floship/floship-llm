@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.14] - 2025-11-27
+
+### Added
+- **Per-Message Truncation:** Added automatic truncation of individual messages that exceed token limits
+  - Messages are truncated to 1/4 of `input_tokens_limit` (default: 10,000 tokens per message)
+  - Prevents CloudFront WAF 403 errors caused by massive content (e.g., large PR descriptions)
+  - Logs a warning when truncation occurs with original and truncated token counts
+  - Truncation happens after WAF sanitization in `_validate_messages_for_api()`
+
 ## [0.5.13] - 2025-11-27
 
 ### Added
