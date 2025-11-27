@@ -208,13 +208,13 @@ class ToolManager:
 
             # Execute tool
             start_time = time.time()
-            logger.info(f"Executing tool '{tool_call.name}'")
+            logger.warning(f"Executing tool '{tool_call.name}'")
             logger.debug(f"Tool args: {args}")
 
             result = tool.function(**args)
 
             execution_time = time.time() - start_time
-            logger.info(
+            logger.warning(
                 f"Tool '{tool_call.name}' executed successfully in "
                 f"{execution_time:.2f}s"
             )
