@@ -1875,6 +1875,16 @@ class LLM:
                 ]:
                     validated_msg["content"] = "Tool executed successfully"
 
+            # Apply WAF sanitization to ALL message content if enabled
+            if self.waf_config.enable_waf_sanitization:
+                validated_msg["content"], was_sanitized = (
+                    CloudFrontWAFSanitizer.sanitize(validated_msg["content"])
+                )
+                if was_sanitized and self.waf_config.debug_mode:
+                    logger.debug(
+                        f"WAF sanitized message {i} ({role}): content modified"
+                    )
+
             # Ensure no empty content
             if validated_msg["content"] == "":
                 validated_msg["content"] = (
@@ -1883,46 +1893,69 @@ class LLM:
                     else "."
                 )
 
-            # Sanitize tool call names to comply with API regex validation
+            # Sanitize tool call names and arguments to comply with API and WAF
             if "tool_calls" in validated_msg:
                 tool_calls = validated_msg.get("tool_calls")
-                if isinstance(tool_calls, list):
-                    sanitized_tool_calls = []
-                    for tc_index, tc in enumerate(tool_calls):
-                        if not isinstance(tc, dict):
-                            logger.warning(
-                                "Skipping invalid tool_call at message %d index %d: %s",
-                                i,
-                                tc_index,
-                                type(tc),
-                            )
-                            continue
-
-                        sanitized_tc = dict(tc)
-                        if (
-                            sanitized_tc.get("type") == "function"
-                            and "function" in sanitized_tc
-                        ):
-                            func = dict(sanitized_tc.get("function") or {})
-                            name = func.get("name")
-                            safe_name, _ = self._sanitize_tool_name_for_api(name)
-                            func["name"] = safe_name
-                            sanitized_tc["function"] = func
-
-                        sanitized_tool_calls.append(sanitized_tc)
-
-                    validated_msg["tool_calls"] = sanitized_tool_calls
-                else:
+                if not isinstance(tool_calls, list):
                     logger.warning(
                         "tool_calls for message %d is not a list (found %s); dropping invalid value",
                         i,
                         type(tool_calls),
                     )
                     validated_msg["tool_calls"] = []
+                else:
+                    validated_msg["tool_calls"] = self._sanitize_tool_calls(
+                        tool_calls, i
+                    )
 
             validated_messages.append(validated_msg)
 
         return validated_messages
+
+    def _sanitize_tool_calls(
+        self, tool_calls: List[Dict], msg_index: int
+    ) -> List[Dict]:
+        """
+        Sanitize tool calls for API compliance and WAF protection.
+
+        Args:
+            tool_calls: List of tool call dictionaries
+            msg_index: Index of the message (for logging)
+
+        Returns:
+            List of sanitized tool call dictionaries
+        """
+        sanitized_tool_calls = []
+        for tc_index, tc in enumerate(tool_calls):
+            if not isinstance(tc, dict):
+                logger.warning(
+                    "Skipping invalid tool_call at message %d index %d: %s",
+                    msg_index,
+                    tc_index,
+                    type(tc),
+                )
+                continue
+
+            sanitized_tc = dict(tc)
+            if sanitized_tc.get("type") != "function" or "function" not in sanitized_tc:
+                sanitized_tool_calls.append(sanitized_tc)
+                continue
+
+            func = dict(sanitized_tc.get("function") or {})
+            name = func.get("name")
+            safe_name, _ = self._sanitize_tool_name_for_api(name)
+            func["name"] = safe_name
+
+            # Sanitize arguments for WAF if enabled
+            if self.waf_config.enable_waf_sanitization:
+                args = func.get("arguments")
+                if args and isinstance(args, str):
+                    func["arguments"], _ = CloudFrontWAFSanitizer.sanitize(args)
+
+            sanitized_tc["function"] = func
+            sanitized_tool_calls.append(sanitized_tc)
+
+        return sanitized_tool_calls
 
     # ========== Tool Management (Delegated) ==========
 

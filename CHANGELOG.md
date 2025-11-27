@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.11] - 2025-11-27
+
+### Fixed
+- **WAF Sanitization Applied to All Messages:** WAF sanitization is now applied to ALL message content in `_validate_messages_for_api()`, not just the user prompt and system message
+  - Tool responses containing tracebacks with `exec()`, `File "<script>"`, etc. are now properly sanitized
+  - Tool call `arguments` JSON fields are also sanitized to prevent `}}` template injection triggers
+  - This fixes WAF 403 blocks when conversation history contains Python execution tool output with tracebacks
+
 ## [0.5.10] - 2025-11-27
 
 ### Added
