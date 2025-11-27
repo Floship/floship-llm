@@ -33,6 +33,64 @@ class TruncatedResponseError(Exception):
         self.raw_response = raw_response
 
 
+class CloudFrontWAFError(Exception):
+    """
+    Raised when CloudFront WAF blocks a request.
+
+    This exception contains full context about the blocked request for debugging
+    and monitoring in tools like Sentry.
+
+    Attributes:
+        message: Human-readable error message
+        messages: The conversation messages that triggered the block
+        detected_blockers: List of detected WAF trigger patterns
+        context: Additional context string (e.g., method name)
+        original_error: The original PermissionDeniedError from the API
+    """
+
+    def __init__(
+        self,
+        message: str,
+        messages: Optional[List[Dict]] = None,
+        detected_blockers: Optional[List[Tuple[str, str]]] = None,
+        context: str = "",
+        original_error: Optional[Exception] = None,
+    ):
+        # Store instance attributes first
+        self.messages = messages or []
+        self.detected_blockers = detected_blockers or []
+        self.context = context
+        self.original_error = original_error
+
+        # Build detailed message for Sentry
+        details = [message]
+
+        if context:
+            details.append(f"Context: {context}")
+
+        if self.messages:
+            details.append(f"Message count: {len(self.messages)}")
+            # Include message summaries
+            for i, msg in enumerate(self.messages[-10:]):  # Last 10 messages
+                role = msg.get("role", "unknown")
+                content = str(msg.get("content", ""))[:200]
+                details.append(f"  [{i}] {role}: {content}...")
+
+        if self.detected_blockers:
+            details.append(f"Detected WAF triggers ({len(self.detected_blockers)}):")
+            for category, pattern in self.detected_blockers[:10]:  # First 10 blockers
+                details.append(f"  - {category}: {pattern[:50]}")
+
+        full_message = "\n".join(details)
+        super().__init__(
+            full_message,
+            messages,
+            detected_blockers,
+            context,
+            original_error,
+        )
+
+
 @dataclass
 class LLMConfig:
     """Configuration for LLM client behavior."""
@@ -487,17 +545,24 @@ class LLM:
         error_str = str(error).lower()
         return "403" in error_str or "forbidden" in error_str
 
-    def _log_waf_blocked_content(self, messages: List[Dict], context: str = ""):
+    def _log_waf_blocked_content(
+        self, messages: List[Dict], context: str = ""
+    ) -> List[Tuple[str, str]]:
         """
         Log content that triggered a CloudFront WAF block for debugging.
 
         Args:
             messages: The messages that were sent when WAF blocked
             context: Additional context string for the log
+
+        Returns:
+            List of detected blocker tuples (category, pattern)
         """
+        all_blockers = []
+
         if not messages:
             logger.warning(f"CloudFront WAF block {context}: No messages to log")
-            return
+            return all_blockers
 
         # Log summary of what triggered the block
         logger.error(
@@ -518,6 +583,7 @@ class LLM:
             # Check for known blocker patterns
             blockers = self.waf_sanitizer.check_for_blockers(str(content))
             if blockers:
+                all_blockers.extend(blockers)
                 logger.error(
                     f"  Message {i} ({role}): Found {len(blockers)} WAF blockers: "
                     f"{[b[0] for b in blockers[:5]]}"
@@ -537,6 +603,9 @@ class LLM:
                 for tc in msg.get("tool_calls", [])[:3]:
                     func = tc.get("function", {})
                     args = func.get("arguments", "")
+                    args_blockers = self.waf_sanitizer.check_for_blockers(str(args))
+                    if args_blockers:
+                        all_blockers.extend(args_blockers)
                     if isinstance(args, str) and len(args) > 200:
                         args_preview = args[:200] + "..."
                     else:
@@ -545,6 +614,8 @@ class LLM:
                         f"    Tool call: {func.get('name', 'unknown')} - "
                         f"args preview: {args_preview}"
                     )
+
+        return all_blockers
 
     def get_waf_metrics(self) -> dict:
         """Get current CloudFront WAF metrics."""
@@ -1149,10 +1220,21 @@ class LLM:
                             logger.error(
                                 f"CloudFront WAF: Failed after {self.waf_config.max_waf_retries + 1} attempts"
                             )
-                            # Log final state of messages that caused the block
-                            self._log_waf_blocked_content(
+                            # Log and collect blockers for the exception
+                            detected_blockers = self._log_waf_blocked_content(
                                 self.messages, "(final failure, prompt method)"
                             )
+                            self.waf_metrics.failed_requests += 1
+
+                            # Raise CloudFrontWAFError with full context for Sentry
+                            raise CloudFrontWAFError(
+                                message=f"CloudFront WAF blocked request after {self.waf_config.max_waf_retries + 1} attempts",
+                                messages=self.messages.copy(),
+                                detected_blockers=detected_blockers,
+                                context="prompt method",
+                                original_error=e,
+                            ) from e
+
                         self.waf_metrics.failed_requests += 1
 
                         if self.waf_config.debug_mode:
@@ -1321,10 +1403,21 @@ class LLM:
                         logger.error(
                             f"CloudFront WAF: Streaming failed after {self.waf_config.max_waf_retries + 1} attempts"
                         )
-                        # Log final state of messages that caused the block
-                        self._log_waf_blocked_content(
+                        # Log and collect blockers for the exception
+                        detected_blockers = self._log_waf_blocked_content(
                             self.messages, "(final failure, stream method)"
                         )
+                        self.waf_metrics.failed_requests += 1
+
+                        # Raise CloudFrontWAFError with full context for Sentry
+                        raise CloudFrontWAFError(
+                            message=f"CloudFront WAF blocked streaming request after {self.waf_config.max_waf_retries + 1} attempts",
+                            messages=self.messages.copy(),
+                            detected_blockers=detected_blockers,
+                            context="prompt_stream method",
+                            original_error=e,
+                        ) from e
+
                     self.waf_metrics.failed_requests += 1
 
                     if self.waf_config.debug_mode:
@@ -1707,11 +1800,20 @@ class LLM:
                     **params, messages=validated_messages
                 )
             except PermissionDeniedError as e:
+                context = "_handle_tool_calls streaming"
                 if self._is_cloudfront_403(e):
                     self.waf_metrics.cloudfront_403_errors += 1
-                    self._log_waf_blocked_content(
-                        self.messages, "(_handle_tool_calls streaming)"
+                    detected_blockers = self._log_waf_blocked_content(
+                        self.messages, context
                     )
+                    self.waf_metrics.failed_requests += 1
+                    raise CloudFrontWAFError(
+                        message=f"CloudFront WAF blocked request in {context}",
+                        messages=self.messages.copy(),
+                        detected_blockers=detected_blockers,
+                        context=context,
+                        original_error=e,
+                    ) from e
                 self.waf_metrics.failed_requests += 1
                 raise
 
@@ -1735,11 +1837,20 @@ class LLM:
                             messages=validated_messages,
                         )
                     except PermissionDeniedError as e:
+                        context = "_handle_tool_calls recursive fallback"
                         if self._is_cloudfront_403(e):
                             self.waf_metrics.cloudfront_403_errors += 1
-                            self._log_waf_blocked_content(
-                                self.messages, "(_handle_tool_calls recursive fallback)"
+                            detected_blockers = self._log_waf_blocked_content(
+                                self.messages, context
                             )
+                            self.waf_metrics.failed_requests += 1
+                            raise CloudFrontWAFError(
+                                message=f"CloudFront WAF blocked request in {context}",
+                                messages=self.messages.copy(),
+                                detected_blockers=detected_blockers,
+                                context=context,
+                                original_error=e,
+                            ) from e
                         self.waf_metrics.failed_requests += 1
                         raise
                     return self._handle_tool_calls(
@@ -1785,11 +1896,20 @@ class LLM:
                     messages=validated_messages,
                 )
             except PermissionDeniedError as e:
+                context = "_handle_tool_calls non-streaming"
                 if self._is_cloudfront_403(e):
                     self.waf_metrics.cloudfront_403_errors += 1
-                    self._log_waf_blocked_content(
-                        self.messages, "(_handle_tool_calls non-streaming)"
+                    detected_blockers = self._log_waf_blocked_content(
+                        self.messages, context
                     )
+                    self.waf_metrics.failed_requests += 1
+                    raise CloudFrontWAFError(
+                        message=f"CloudFront WAF blocked request in {context}",
+                        messages=self.messages.copy(),
+                        detected_blockers=detected_blockers,
+                        context=context,
+                        original_error=e,
+                    ) from e
                 self.waf_metrics.failed_requests += 1
                 raise
 

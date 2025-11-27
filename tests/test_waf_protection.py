@@ -7,6 +7,7 @@ from openai import PermissionDeniedError
 
 from floship_llm.client import (
     LLM,
+    CloudFrontWAFError,
     CloudFrontWAFSanitizer,
     LLMConfig,
     LLMMetrics,
@@ -688,3 +689,116 @@ class TestWAFLogging:
 
         # The function should run without error
         # (truncation is internal, not visible in standard logs)
+
+
+class TestCloudFrontWAFError:
+    """Test CloudFrontWAFError exception functionality."""
+
+    def test_exception_has_all_attributes(self):
+        """Test that CloudFrontWAFError has all required attributes."""
+        messages = [
+            {"role": "user", "content": "test message"},
+            {"role": "assistant", "content": "response with <script>"},
+        ]
+        detected_blockers = [("xss", "<script>")]
+        context = "prompt()"
+        original_error = PermissionDeniedError(
+            message="403", body=None, response=Mock(status_code=403)
+        )
+
+        error = CloudFrontWAFError(
+            message="CloudFront WAF blocked request",
+            messages=messages,
+            detected_blockers=detected_blockers,
+            context=context,
+            original_error=original_error,
+        )
+
+        assert error.messages == messages
+        assert error.detected_blockers == detected_blockers
+        assert error.context == context
+        assert error.original_error == original_error
+        assert "CloudFront WAF blocked request" in str(error)
+
+    def test_exception_inherits_from_exception(self):
+        """Test that CloudFrontWAFError inherits from Exception."""
+        error = CloudFrontWAFError(
+            message="test",
+            messages=[],
+            detected_blockers=[],
+            context="test",
+            original_error=None,
+        )
+
+        assert isinstance(error, Exception)
+
+    def test_exception_can_be_caught(self):
+        """Test that CloudFrontWAFError can be caught."""
+        error = CloudFrontWAFError(
+            message="test",
+            messages=[{"role": "user", "content": "test"}],
+            detected_blockers=[],
+            context="test",
+            original_error=None,
+        )
+
+        try:
+            raise error
+        except CloudFrontWAFError as caught:
+            assert caught.messages == [{"role": "user", "content": "test"}]
+
+    def test_exception_sentry_compatibility(self):
+        """Test that exception attributes are accessible for Sentry extra data."""
+        messages = [
+            {"role": "user", "content": "exec(code)"},
+            {"role": "assistant", "content": '<script>File "<script>"</script>'},
+        ]
+        detected_blockers = [("python_exec", "exec("), ("xss", "<script>")]
+
+        error = CloudFrontWAFError(
+            message="CloudFront WAF blocked request in prompt()",
+            messages=messages,
+            detected_blockers=detected_blockers,
+            context="prompt()",
+            original_error=None,
+        )
+
+        # Simulate Sentry extra data extraction
+        sentry_extra = {
+            "messages": error.messages,
+            "detected_blockers": error.detected_blockers,
+            "context": error.context,
+        }
+
+        assert sentry_extra["context"] == "prompt()"
+        assert len(sentry_extra["messages"]) == 2
+        assert len(sentry_extra["detected_blockers"]) == 2
+        assert sentry_extra["detected_blockers"][0] == ("python_exec", "exec(")
+
+    def test_exception_exported_from_init(self):
+        """Test that CloudFrontWAFError is exported from floship_llm.__init__."""
+        from floship_llm import CloudFrontWAFError as ImportedError
+
+        assert ImportedError is CloudFrontWAFError
+
+    def test_exception_includes_details_in_message(self):
+        """Test that the exception message includes context and blockers."""
+        messages = [
+            {"role": "user", "content": "run this code"},
+            {"role": "assistant", "content": "exec(code) result"},
+        ]
+        detected_blockers = [("python_exec", "exec(")]
+
+        error = CloudFrontWAFError(
+            message="CloudFront WAF blocked request",
+            messages=messages,
+            detected_blockers=detected_blockers,
+            context="prompt()",
+            original_error=None,
+        )
+
+        error_str = str(error)
+        assert "CloudFront WAF blocked request" in error_str
+        assert "Context: prompt()" in error_str
+        assert "Message count: 2" in error_str
+        assert "python_exec" in error_str

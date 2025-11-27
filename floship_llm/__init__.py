@@ -5,6 +5,7 @@ A reusable LLM client library for interacting with OpenAI-compatible inference e
 
 from .client import (
     LLM,
+    CloudFrontWAFError,
     CloudFrontWAFSanitizer,
     LLMConfig,
     LLMMetrics,
@@ -32,6 +33,7 @@ __all__ = [
     "LLM",
     "LLMConfig",
     "LLMMetrics",
+    "CloudFrontWAFError",
     "CloudFrontWAFSanitizer",
     "TruncatedResponseError",
     "ContentProcessor",
@@ -52,4 +54,4 @@ __all__ = [
     "EmbeddingUsage",
 ]
 
-__version__ = "0.5.9"
+__version__ = "0.5.12"

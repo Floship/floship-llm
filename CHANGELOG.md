@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.12] - 2025-11-27
+
+### Added
+- **CloudFrontWAFError Exception:** New custom exception class `CloudFrontWAFError` that is raised when CloudFront WAF blocks a request
+  - Contains full context for Sentry: `messages`, `detected_blockers`, `context`, `original_error`
+  - Exception message includes formatted details: context, message count, message previews, and detected blockers
+  - Exported from `floship_llm` package for easy catching and handling
+  - Replaces silent re-raising of `PermissionDeniedError` for WAF-specific 403 errors
+
+### Changed
+- **WAF Error Handling:** All CloudFront 403 errors now raise `CloudFrontWAFError` instead of generic `PermissionDeniedError`
+  - `prompt()` method raises `CloudFrontWAFError` after all retry attempts fail
+  - `prompt_stream()` method raises `CloudFrontWAFError` after all retry attempts fail
+  - `_handle_tool_calls()` streaming, recursive, and non-streaming paths all raise `CloudFrontWAFError`
+  - Exception contains full message history and detected WAF trigger patterns for debugging in Sentry
+
 ## [0.5.11] - 2025-11-27
 
 ### Fixed
