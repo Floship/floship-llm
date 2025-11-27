@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.13] - 2025-11-27
+
+### Added
+- **InternalServerError Recovery:** Added recovery logic for 500 Internal Server Errors during tool call follow-up requests
+  - When Heroku Inference API returns 500 ("Failed to execute chat"), the client now attempts to recover
+  - Recovery truncates recent tool message content to a simple success message
+  - Retries the API call once with simplified context
+  - If recovery fails, the original error is re-raised
+  - Applies to both streaming recursive fallback and non-streaming follow-up paths
+  - Prevents complete failures when tool output causes server-side parsing issues
+
 ## [0.5.12] - 2025-11-27
 
 ### Added

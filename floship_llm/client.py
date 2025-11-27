@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from openai import OpenAI, PermissionDeniedError
+from openai import InternalServerError, OpenAI, PermissionDeniedError
 from pydantic import BaseModel
 
 from .content_processor import ContentProcessor
@@ -1836,6 +1836,50 @@ class LLM:
                             **params,
                             messages=validated_messages,
                         )
+                    except InternalServerError:
+                        logger.warning(
+                            "Internal Server Error detected after tool execution (recursive). "
+                            "Attempting to recover by simplifying tool outputs."
+                        )
+
+                        # Check if we have tool messages to simplify
+                        modified = False
+                        for i in range(len(self.messages) - 1, -1, -1):
+                            msg = self.messages[i]
+                            if msg.get("role") == "tool":
+                                original_len = len(str(msg.get("content", "")))
+                                msg["content"] = (
+                                    "Tool execution succeeded, but output was truncated due to server error. "
+                                    "Please proceed based on the fact that the tool ran successfully."
+                                )
+                                logger.info(
+                                    f"Truncated tool message {i} (original len: {original_len}) due to 500 error"
+                                )
+                                modified = True
+                            else:
+                                break
+
+                        if modified:
+                            # Re-validate messages
+                            validated_messages = self._validate_messages_for_api(
+                                self.messages
+                            )
+
+                            # Retry once with simplified context
+                            try:
+                                follow_up_response = (
+                                    self.retry_handler.execute_with_retry(
+                                        self.client.chat.completions.create,
+                                        **params,
+                                        messages=validated_messages,
+                                    )
+                                )
+                            except Exception as e:
+                                logger.error(f"Recovery attempt failed: {e}")
+                                raise
+                        else:
+                            raise
+
                     except PermissionDeniedError as e:
                         context = "_handle_tool_calls recursive fallback"
                         if self._is_cloudfront_403(e):
@@ -1895,6 +1939,51 @@ class LLM:
                     **params,
                     messages=validated_messages,
                 )
+            except InternalServerError:
+                logger.warning(
+                    "Internal Server Error detected after tool execution. "
+                    "Attempting to recover by simplifying tool outputs."
+                )
+
+                # Check if we have tool messages to simplify
+                modified = False
+                # Only look at the most recent messages (likely the tool outputs causing the issue)
+                # We iterate backwards until we find a non-tool message
+                for i in range(len(self.messages) - 1, -1, -1):
+                    msg = self.messages[i]
+                    if msg.get("role") == "tool":
+                        # Replace content with a simplified message
+                        original_len = len(str(msg.get("content", "")))
+                        msg["content"] = (
+                            "Tool execution succeeded, but output was truncated due to server error. "
+                            "Please proceed based on the fact that the tool ran successfully."
+                        )
+                        logger.info(
+                            f"Truncated tool message {i} (original len: {original_len}) due to 500 error"
+                        )
+                        modified = True
+                    else:
+                        # Stop if we hit a non-tool message (e.g., the assistant message that called the tools)
+                        break
+
+                if modified:
+                    # Re-validate messages
+                    validated_messages = self._validate_messages_for_api(self.messages)
+
+                    # Retry once with simplified context
+                    try:
+                        follow_up_response = self.retry_handler.execute_with_retry(
+                            self.client.chat.completions.create,
+                            **params,
+                            messages=validated_messages,
+                        )
+                    except Exception as e:
+                        logger.error(f"Recovery attempt failed: {e}")
+                        raise
+                else:
+                    # No tool messages found to simplify, re-raise
+                    raise
+
             except PermissionDeniedError as e:
                 context = "_handle_tool_calls non-streaming"
                 if self._is_cloudfront_403(e):
