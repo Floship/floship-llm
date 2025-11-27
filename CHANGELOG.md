@@ -10,13 +10,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.5.15] - 2025-11-28
 
 ### Added
-- **Maximum Recursion Depth Limit:** Added configurable limit to prevent infinite tool call loops
+- **Maximum Recursion Depth Limit with Auto-Correction:** Added configurable limit to prevent infinite tool call loops with intelligent recovery
   - Default limit: 10 iterations (configurable via `max_recursion_depth` param or `LLM_MAX_RECURSION_DEPTH` env var)
   - Logs INFO at each recursion level with tool names and total call count
   - Logs WARNING when depth >= 5 (getting deep)
-  - Logs ERROR and stops when max depth exceeded
-  - Returns user-friendly error message instead of continuing infinitely
-  - Prevents runaway API costs from infinite tool call loops
+  - When max depth is reached, injects a system guidance message prompting the LLM to summarize findings
+  - Makes a final API call WITHOUT tools to get a proper response from the LLM
+  - Includes summary of recent tools called for context
+  - Falls back to user-friendly message if final call fails
+  - Prevents runaway API costs from infinite tool call loops while still delivering useful output
 
 ## [0.5.14] - 2025-11-27
 
