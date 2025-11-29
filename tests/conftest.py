@@ -5,11 +5,21 @@ This module ensures that no tests make actual external HTTP requests.
 All HTTP requests must be mocked.
 """
 
+import logging
 import socket
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Configure logging based on verbosity."""
+    verbose = config.getoption("verbose")
+    if verbose >= 2:
+        logging.getLogger().setLevel(logging.DEBUG)
+    else:
+        logging.getLogger().setLevel(logging.CRITICAL)
 
 
 class ExternalRequestBlockedError(Exception):

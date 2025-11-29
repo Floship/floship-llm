@@ -1059,6 +1059,7 @@ class TestToolManagerValidation:
         result = manager.execute_tool(tc)
 
         assert result.success is False
+        assert result.error is not None
         assert "No executable function defined" in result.error
 
     def test_execute_tool_json_parse_error(self):

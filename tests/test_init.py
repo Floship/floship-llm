@@ -128,6 +128,7 @@ class TestModuleDocstring:
     def test_docstring_content(self):
         """Test docstring content."""
         docstring = floship_llm.__doc__
+        assert docstring is not None
         assert "Floship LLM Client Library" in docstring
         assert "reusable LLM client library" in docstring
         assert "OpenAI-compatible inference endpoints" in docstring

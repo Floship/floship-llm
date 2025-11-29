@@ -1,6 +1,5 @@
 """Tests for loop prevention in LLM client."""
 
-from typing import Any
 from unittest.mock import MagicMock
 
 from floship_llm.client import LLM
@@ -20,7 +19,7 @@ class TestDetectToolLoop:
     def test_detect_loop_no_history(self) -> None:
         """Test no loop detected with empty history."""
         llm = LLM.__new__(LLM)
-        llm._current_tool_history: list[dict[str, Any]] = []
+        llm._current_tool_history = []
 
         tool_calls = [create_mock_tool_call("test_tool", '{"arg": "value"}')]
         result = llm._detect_tool_loop(tool_calls)

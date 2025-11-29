@@ -474,7 +474,7 @@ class LLM:
         if self.system:
             self.add_message("system", self.system)
 
-    def get_last_raw_response(self) -> str:
+    def get_last_raw_response(self) -> Optional[str]:
         """Get the last raw response from the LLM before any processing.
 
         Useful for debugging when structured output parsing fails.
@@ -834,7 +834,7 @@ class LLM:
 
     def embed(
         self, input: Union[str, List[str]], return_full_response: bool = False
-    ) -> Union[List[float], List[List[float]], Dict[str, Any]]:
+    ) -> Any:
         """
         Generate embeddings for text using Heroku Inference API.
 
@@ -967,7 +967,7 @@ class LLM:
         retry: bool = False,
         stream_final_response: bool = False,
         force_no_stream: bool = False,
-    ) -> str:
+    ) -> Any:
         """
         Generate completion from prompt with automatic CloudFront WAF protection.
 

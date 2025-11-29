@@ -254,6 +254,21 @@ class TestAPIRetry:
         retryable_codes = [429, 500, 502, 503, 504]
         non_retryable_codes = [400, 401, 403, 404]
 
+        def create_handler(code, stream_response):
+            state = {"call_count": 0}
+
+            def handler(*args, **kwargs):
+                state["call_count"] += 1
+                if state["call_count"] == 1:
+                    raise APIStatusError(
+                        message=f"Error {code}",
+                        response=Mock(status_code=code),
+                        body={"error": f"Error {code}"},
+                    )
+                return stream_response
+
+            return handler, state
+
         for status_code in retryable_codes:
             with patch("floship_llm.client.OpenAI") as mock_openai:
                 llm = LLM()
@@ -261,25 +276,15 @@ class TestAPIRetry:
                 # Create mock streaming response
                 mock_stream = create_mock_stream_response("Success")
 
-                call_count = 0
-
-                def mock_create(*args, **kwargs):
-                    nonlocal call_count
-                    call_count += 1
-                    if call_count == 1:
-                        raise APIStatusError(
-                            message=f"Error {status_code}",
-                            response=Mock(status_code=status_code),
-                            body={"error": f"Error {status_code}"},
-                        )
-                    return mock_stream
-
-                mock_openai.return_value.chat.completions.create = mock_create
+                handler, state = create_handler(status_code, mock_stream)
+                mock_openai.return_value.chat.completions.create = handler
 
                 with patch("time.sleep"):
                     result = llm.prompt("Test prompt")
 
-                assert call_count == 2, f"Status code {status_code} should be retried"
+                assert state["call_count"] == 2, (
+                    f"Status code {status_code} should be retried"
+                )
                 assert result == "Success"
 
         for status_code in non_retryable_codes:
