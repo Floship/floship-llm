@@ -1,0 +1,29 @@
+{
+  "include": ["floship_llm", "tests"],
+  "exclude": ["**/__pycache__", "**/*.pyc", "htmlcov", ".venv", "venv"],
+  "ignore": [],
+  "defineConstant": {
+    "DEBUG": true
+  },
+  "stubPath": "typings",
+  "venvPath": ".",
+  "venv": ".venv",
+  "reportMissingImports": true,
+  "reportMissingTypeStubs": false,
+  "reportUnusedImport": true,
+  "reportUnusedVariable": true,
+  "reportDuplicateImport": true,
+  "reportPrivateUsage": false,
+  "reportUnusedClass": true,
+  "reportUnusedFunction": true,
+  "reportOptionalMemberAccess": false,
+  "reportOptionalSubscript": false,
+  "reportOptionalCall": false,
+  "reportUnnecessaryTypeIgnoreComment": true,
+  "reportUnnecessaryCast": true,
+  "reportAssertAlwaysTrue": true,
+  "pythonVersion": "3.11",
+  "pythonPlatform": "All",
+  "typeCheckingMode": "basic",
+  "useLibraryCodeForTypes": true
+}
