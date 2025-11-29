@@ -1375,3 +1375,39 @@ class TestLLMEdgeCases:
         assert len(error.detected_blockers) == 2
         assert error.context == "prompt method"
         assert error.original_error == original
+
+
+class TestToolNameSanitization:
+    """Test tool name sanitization."""
+
+    def test_sanitize_valid_name(self):
+        """Test that valid names are not changed."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            name, changed = llm._sanitize_tool_name_for_api("valid_tool_name")
+            assert name == "valid_tool_name"
+            assert changed is False
+
+    def test_sanitize_invalid_chars(self):
+        """Test sanitization of invalid characters."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            name, changed = llm._sanitize_tool_name_for_api("invalid tool name!")
+            assert name == "invalid_tool_name"
+            assert changed is True
+
+    def test_sanitize_empty_name(self):
+        """Test sanitization of empty name."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            name, changed = llm._sanitize_tool_name_for_api("")
+            assert name.startswith("tool_")
+            assert changed is True
+
+    def test_sanitize_none_name(self):
+        """Test sanitization of None name."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            name, changed = llm._sanitize_tool_name_for_api(None)
+            assert name.startswith("tool_")
+            assert changed is True

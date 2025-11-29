@@ -516,6 +516,18 @@ class TestLLMWAFIntegration:
         assert sanitized == content
         assert "../" in sanitized
 
+    def test_sanitize_updates_metrics(self, mock_env, mock_client):
+        """Test that sanitization updates specific pattern metrics."""
+        llm = LLM(enable_waf_sanitization=True)
+
+        # Test XSS metric
+        llm._sanitize_for_waf("<script>alert(1)</script>")
+        assert llm.waf_metrics.xss_pattern_count >= 1
+
+        # Test Path Traversal metric
+        llm._sanitize_for_waf("../../etc/passwd")
+        assert llm.waf_metrics.path_traversal_count >= 1
+
     def test_is_cloudfront_403(self, mock_env, mock_client):
         """Test CloudFront 403 error detection."""
         llm = LLM()
@@ -689,6 +701,38 @@ class TestWAFLogging:
 
         # The function should run without error
         # (truncation is internal, not visible in standard logs)
+
+    def test_log_waf_blocked_content_with_tool_calls(self, monkeypatch, caplog):
+        """Test logging when messages contain tool calls."""
+        import logging
+
+        monkeypatch.setenv("INFERENCE_URL", "https://test.inference.com")
+        monkeypatch.setenv("INFERENCE_MODEL_ID", "test-model")
+        monkeypatch.setenv("INFERENCE_KEY", "test-key")
+        llm = LLM(api_key="test-key")
+
+        messages = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "function": {
+                            "name": "test_tool",
+                            "arguments": '{"code": "print(\'hello\')"}',
+                        }
+                    }
+                ],
+            }
+        ]
+
+        with caplog.at_level(logging.DEBUG, logger="floship_llm.client"):
+            llm._log_waf_blocked_content(messages, "(tool test)")
+
+        # Check that tool call was logged
+        assert any(
+            "Tool call: test_tool" in record.message for record in caplog.records
+        )
 
 
 class TestCloudFrontWAFError:
