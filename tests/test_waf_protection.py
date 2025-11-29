@@ -1,6 +1,6 @@
 """Tests for CloudFront WAF protection and sanitization."""
 
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 from openai import PermissionDeniedError

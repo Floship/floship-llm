@@ -1,17 +1,13 @@
 """Tests for the LLM client module."""
 
-import json
 import os
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
-from openai.types import Completion
-from openai.types.chat import ChatCompletion, ChatCompletionMessage
-from openai.types.chat.chat_completion import Choice
 from pydantic import BaseModel
 
 from floship_llm.client import LLM
-from floship_llm.schemas import ThinkingModel, ToolFunction, ToolParameter
+from floship_llm.schemas import ToolFunction, ToolParameter
 
 
 def create_mock_stream_response(content: str):
@@ -488,7 +484,7 @@ class TestLLM:
 
             llm = LLM()
             with patch.object(llm, "prompt") as mock_prompt:
-                result = llm.retry_prompt("test prompt")
+                llm.retry_prompt("test prompt")
                 mock_prompt.assert_called_once_with("test prompt", retry=True)
                 assert llm.retry_count == 1
 
@@ -532,19 +528,19 @@ class TestLLM:
             llm = LLM(max_retry=3)
 
             # First retry
-            with patch.object(llm, "prompt", return_value="response1") as mock_prompt:
+            with patch.object(llm, "prompt", return_value="response1"):
                 result = llm.retry_prompt("test")
                 assert llm.retry_count == 1
                 assert result == "response1"
 
             # Second retry
-            with patch.object(llm, "prompt", return_value="response2") as mock_prompt:
+            with patch.object(llm, "prompt", return_value="response2"):
                 result = llm.retry_prompt("test")
                 assert llm.retry_count == 2
                 assert result == "response2"
 
             # Third retry
-            with patch.object(llm, "prompt", return_value="response3") as mock_prompt:
+            with patch.object(llm, "prompt", return_value="response3"):
                 result = llm.retry_prompt("test")
                 assert llm.retry_count == 3
                 assert result == "response3"
@@ -565,7 +561,7 @@ class TestLLM:
             llm = LLM()
             llm.retry_count = 2  # Simulate some retries
 
-            result = llm.prompt("New prompt")
+            llm.prompt("New prompt")
             assert llm.retry_count == 0  # Should be reset
 
     def test_reset(self):
@@ -1072,7 +1068,7 @@ class TestLLM:
 
             # Execute with streaming
             result = llm.prompt("Test", stream_final_response=True)
-            chunks = list(result)
+            list(result)
 
             # Check conversation history was updated
             assert len(llm.messages) > 0
@@ -1226,3 +1222,156 @@ class TestLLM:
         with patch("floship_llm.client.OpenAI"):
             llm = LLM()
             assert llm.get_last_raw_response() is None
+
+
+class TestLLMDebugMode:
+    """Tests for debug mode configuration."""
+
+    def setup_method(self):
+        """Set up test environment variables."""
+        os.environ["INFERENCE_URL"] = "http://test-url.com"
+        os.environ["INFERENCE_MODEL_ID"] = "test-model"
+        os.environ["INFERENCE_KEY"] = "test-key"
+
+    def test_debug_mode_kwarg(self):
+        """Test that debug_mode kwarg is properly applied."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(debug_mode=True)
+            assert llm.waf_config.debug_mode is True
+
+            llm2 = LLM(debug_mode=False)
+            assert llm2.waf_config.debug_mode is False
+
+    def test_enable_waf_sanitization_kwarg(self):
+        """Test that enable_waf_sanitization kwarg is properly applied."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(enable_waf_sanitization=False)
+            assert llm.waf_config.enable_waf_sanitization is False
+
+            llm2 = LLM(enable_waf_sanitization=True)
+            assert llm2.waf_config.enable_waf_sanitization is True
+
+
+class TestLLMMetrics:
+    """Tests for LLM metrics functionality."""
+
+    def setup_method(self):
+        """Set up test environment variables."""
+        os.environ["INFERENCE_URL"] = "http://test-url.com"
+        os.environ["INFERENCE_MODEL_ID"] = "test-model"
+        os.environ["INFERENCE_KEY"] = "test-key"
+
+    def test_get_waf_metrics_returns_copy(self):
+        """Test that get_waf_metrics returns a copy."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            metrics = llm.get_waf_metrics()
+            # Modify the copy
+            metrics["total_requests"] = 999
+            # Original should be unchanged
+            assert llm.waf_metrics.total_requests != 999
+
+    def test_reset_waf_metrics(self):
+        """Test that reset_waf_metrics clears all counters."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            llm.waf_metrics.total_requests = 10
+            llm.waf_metrics.successful_requests = 8
+            llm.waf_metrics.failed_requests = 2
+
+            llm.reset_waf_metrics()
+
+            metrics = llm.get_waf_metrics()
+            assert metrics["total_requests"] == 0
+
+
+class TestLLMEdgeCases:
+    """Tests for edge cases and error handling."""
+
+    def setup_method(self):
+        """Set up test environment variables."""
+        os.environ["INFERENCE_URL"] = "http://test-url.com"
+        os.environ["INFERENCE_MODEL_ID"] = "test-model"
+        os.environ["INFERENCE_KEY"] = "test-key"
+
+    def test_invalid_type_raises_error(self):
+        """Test that invalid type raises ValueError."""
+        with patch("floship_llm.client.OpenAI"):
+            with pytest.raises(
+                ValueError, match="type must be 'completion' or 'embedding'"
+            ):
+                LLM(type="invalid")
+
+    def test_str_representation(self):
+        """Test __str__ method returns correct info."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(type="completion")
+            str_repr = str(llm)
+            # Check it's a string representation (may vary)
+            assert isinstance(str_repr, str)
+            assert len(str_repr) > 0
+
+    def test_repr_representation(self):
+        """Test __repr__ method returns correct info."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(type="completion")
+            repr_str = repr(llm)
+            # Check it's a string representation
+            assert isinstance(repr_str, str)
+            assert len(repr_str) > 0
+
+    def test_model_property(self):
+        """Test model property returns current model."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            assert llm.model == "test-model"
+
+    def test_get_last_tool_history_empty(self):
+        """Test get_last_tool_history returns empty list initially."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            history = llm.get_last_tool_history()
+            assert history == []
+
+    def test_get_last_tool_history_returns_copy(self):
+        """Test get_last_tool_history returns a copy."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            llm._current_tool_history = [{"tool": "test", "arguments": {}}]
+            history = llm.get_last_tool_history()
+            history.append({"tool": "modified"})
+            # Original should be unchanged
+            assert len(llm._current_tool_history) == 1
+
+    def test_get_last_recursion_depth_initial(self):
+        """Test get_last_recursion_depth returns 0 initially."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            assert llm.get_last_recursion_depth() == 0
+
+    def test_truncated_response_error(self):
+        """Test TruncatedResponseError attributes."""
+        from floship_llm.client import TruncatedResponseError
+
+        error = TruncatedResponseError("Response was truncated", "raw response text")
+        assert "Response was truncated" in str(error)
+        assert error.raw_response == "raw response text"
+
+    def test_cloudfront_waf_error_basic(self):
+        """Test CloudFrontWAFError basic creation."""
+        from floship_llm.client import CloudFrontWAFError
+
+        original = Exception("Original error")
+        # Detected blockers should be list of tuples (category, pattern)
+        error = CloudFrontWAFError(
+            message="WAF blocked",
+            messages=[{"role": "user", "content": "test"}],
+            detected_blockers=[("category1", "pattern1"), ("category2", "pattern2")],
+            context="prompt method",
+            original_error=original,
+        )
+
+        assert error.messages == [{"role": "user", "content": "test"}]
+        assert len(error.detected_blockers) == 2
+        assert error.context == "prompt method"
+        assert error.original_error == original

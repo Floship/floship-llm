@@ -29,7 +29,9 @@ class RetryHandler:
         self.max_retries = max_retries
         self.base_delay = base_delay
 
-    def execute_with_retry(self, api_func: Callable, *args, **kwargs) -> Any:
+    def execute_with_retry(
+        self, api_func: Callable[..., Any], *args: Any, **kwargs: Any
+    ) -> Any:
         """
         Execute an API call with retry logic.
 
@@ -44,7 +46,9 @@ class RetryHandler:
         Raises:
             The last exception if all retries fail
         """
-        last_exception = None
+        last_exception: (
+            APIStatusError | RateLimitError | APIConnectionError | APIError | None
+        ) = None
 
         for attempt in range(self.max_retries):
             try:

@@ -39,11 +39,11 @@ def example_conversation():
     )
 
     response1 = llm.prompt("What is a Python decorator?")
-    print(f"Q1: What is a Python decorator?")
+    print("Q1: What is a Python decorator?")
     print(f"A1: {response1[:100]}...")
 
     response2 = llm.prompt("Can you show me an example?")
-    print(f"\nQ2: Can you show me an example?")
+    print("\nQ2: Can you show me an example?")
     print(f"A2: {response2[:100]}...")
 
     # Reset for new conversation

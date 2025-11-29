@@ -379,7 +379,7 @@ class LLM:
         self._validate_environment()
 
         # CloudFront WAF protection configuration
-        self.waf_config = kwargs.get("waf_config", None) or LLMConfig()
+        self.waf_config = kwargs.get("waf_config") or LLMConfig()
         self.waf_sanitizer = CloudFrontWAFSanitizer()
         self.waf_metrics = LLMMetrics()
 
@@ -405,15 +405,15 @@ class LLM:
         self.temperature = kwargs.get("temperature", 0.15)
 
         # Heroku-specific parameters (for completions)
-        self.max_completion_tokens = kwargs.get("max_completion_tokens", None)
-        self.top_k = kwargs.get("top_k", None)
-        self.top_p = kwargs.get("top_p", None)
-        self.extended_thinking = kwargs.get("extended_thinking", None)
+        self.max_completion_tokens = kwargs.get("max_completion_tokens")
+        self.top_k = kwargs.get("top_k")
+        self.top_p = kwargs.get("top_p")
+        self.extended_thinking = kwargs.get("extended_thinking")
         self.allow_ignored_params = kwargs.get("allow_ignored_params", False)
 
         # Heroku-specific parameters (for embeddings)
         self.input_type = kwargs.get(
-            "input_type", None
+            "input_type"
         )  # search_document, search_query, classification, clustering
         self.encoding_format = kwargs.get("encoding_format", "float")  # float, base64
         self.embedding_type = kwargs.get(
@@ -422,11 +422,11 @@ class LLM:
 
         # Deprecated parameters (Heroku ignores these but won't error)
         # Kept for backward compatibility but not recommended
-        self.frequency_penalty = kwargs.get("frequency_penalty", None)
-        self.presence_penalty = kwargs.get("presence_penalty", None)
+        self.frequency_penalty = kwargs.get("frequency_penalty")
+        self.presence_penalty = kwargs.get("presence_penalty")
 
         # Response format (structured output)
-        self.response_format = kwargs.get("response_format", None)
+        self.response_format = kwargs.get("response_format")
         if self.response_format and not issubclass(self.response_format, BaseModel):
             raise ValueError(
                 "response_format must be a subclass of BaseModel (pydantic)"
@@ -439,14 +439,14 @@ class LLM:
         self.input_tokens_limit = kwargs.get("input_tokens_limit", 40_000)
         self.max_retry = kwargs.get("max_retry", 3)
         self.retry_count = 0
-        self.system = kwargs.get("system", None)
+        self.system = kwargs.get("system")
 
         # Initialize handlers
         self.retry_handler = RetryHandler(max_retries=self.max_retry)
         self.tool_manager = ToolManager()
         self.content_processor = ContentProcessor(
             sanitize_enabled=kwargs.get("sanitize_tool_responses", True),
-            sanitization_patterns=kwargs.get("sanitization_patterns", None),
+            sanitization_patterns=kwargs.get("sanitization_patterns"),
             max_tokens=kwargs.get("max_tool_response_tokens", 4000),
             track_metadata=kwargs.get("track_tool_metadata", False),
         )
@@ -589,14 +589,13 @@ class LLM:
                     f"{[b[0] for b in blockers[:5]]}"
                 )
                 logger.debug(f"  Content preview: {content_preview}")
-            else:
-                # Still log if it's the last message (most likely culprit)
-                if i == len(messages[-5:]) - 1:
-                    logger.warning(
-                        f"  Message {i} ({role}): No obvious blockers found. "
-                        f"Content length: {len(str(content))}"
-                    )
-                    logger.debug(f"  Content preview: {content_preview}")
+            # Still log if it's the last message (most likely culprit)
+            elif i == len(messages[-5:]) - 1:
+                logger.warning(
+                    f"  Message {i} ({role}): No obvious blockers found. "
+                    f"Content length: {len(str(content))}"
+                )
+                logger.debug(f"  Content preview: {content_preview}")
 
             # Check tool_calls if present
             if "tool_calls" in msg:
@@ -1616,6 +1615,45 @@ class LLM:
 
         return message
 
+    def _detect_tool_loop(self, tool_calls: List[Any]) -> bool:
+        """
+        Check if the proposed tool calls indicate an infinite loop.
+
+        Returns True if the same tool with same arguments has been called
+        repeatedly in recent history.
+        """
+        if not self._current_tool_history:
+            return False
+
+        # Check each proposed tool call
+        for tc in tool_calls:
+            name = tc.function.name
+            args_str = tc.function.arguments
+
+            try:
+                args = json.loads(args_str)
+            except json.JSONDecodeError:
+                args = args_str
+
+            # Count how many times this exact call appears in recent history
+            # We look at the last 10 calls
+            repeats = 0
+            for entry in reversed(self._current_tool_history[-10:]):
+                if entry["tool"] == name:
+                    # Compare arguments
+                    # entry["arguments"] is already a dict (or whatever was parsed)
+                    if entry["arguments"] == args:
+                        repeats += 1
+
+            # If we've seen this exact call 3 or more times recently, it's a loop
+            if repeats >= 3:
+                logger.warning(
+                    f"Tool loop detected: {name} called {repeats} times with same args"
+                )
+                return True
+
+        return False
+
     def _handle_tool_calls(
         self, message, original_response, recursion_depth=0, stream_final_response=False
     ):
@@ -1741,7 +1779,7 @@ class LLM:
 
             except Exception as e:
                 logger.error(
-                    f"Error processing tool call {tool_call.function.name}: {str(e)}"
+                    f"Error processing tool call {tool_call.function.name}: {e!s}"
                 )
 
                 # Still track failed tool calls (arguments may be None if parsing failed)
@@ -1762,7 +1800,7 @@ class LLM:
                 )
 
                 processed = self.content_processor.process_tool_response(
-                    f"Error: {str(e)}", tool_call.function.name
+                    f"Error: {e!s}", tool_call.function.name
                 )
 
                 self.messages.append(
@@ -1777,7 +1815,7 @@ class LLM:
         total_time = time.time() - start_time
         logger.info(
             f"Executed {iteration_tool_count} tool(s) in this iteration "
-            f"(total: {self._current_tool_call_count}) in {total_time*1000:.0f}ms"
+            f"(total: {self._current_tool_call_count}) in {total_time * 1000:.0f}ms"
         )
 
         # Add delay before follow-up
@@ -2085,13 +2123,12 @@ class LLM:
                     validated_msg["content"] = " "
                 else:
                     validated_msg["content"] = "Content unavailable"
-            else:
-                # Fix tool content if it's a placeholder
-                if role == "tool" and content in [
-                    "Message content unavailable",
-                    "Content unavailable",
-                ]:
-                    validated_msg["content"] = "Tool executed successfully"
+            # Fix tool content if it's a placeholder
+            elif role == "tool" and content in [
+                "Message content unavailable",
+                "Content unavailable",
+            ]:
+                validated_msg["content"] = "Tool executed successfully"
 
             # Apply WAF sanitization to ALL message content if enabled
             if self.waf_config.enable_waf_sanitization:

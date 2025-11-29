@@ -1,10 +1,7 @@
 """Tests for tool request delay functionality."""
 
 import os
-import time
 from unittest.mock import Mock, patch
-
-import pytest
 
 from floship_llm import LLM
 from floship_llm.schemas import ToolFunction
@@ -102,7 +99,7 @@ class TestToolRequestDelay:
 
             # Patch time.sleep to verify it's called
             with patch("time.sleep") as mock_sleep:
-                result = llm.process_response(mock_response)
+                llm.process_response(mock_response)
 
                 # Verify sleep was called with the correct delay
                 mock_sleep.assert_called_once_with(2.0)
@@ -158,7 +155,7 @@ class TestToolRequestDelay:
 
             # Patch time.sleep to verify it's NOT called
             with patch("time.sleep") as mock_sleep:
-                result = llm.process_response(mock_response)
+                llm.process_response(mock_response)
 
                 # Verify sleep was NOT called when delay is 0
                 mock_sleep.assert_not_called()
@@ -219,7 +216,7 @@ class TestToolRequestDelay:
 
             # Patch time.sleep to verify it's called only once
             with patch("time.sleep") as mock_sleep:
-                result = llm.process_response(mock_response)
+                llm.process_response(mock_response)
 
                 # Verify sleep was called only once with the correct delay
                 mock_sleep.assert_called_once_with(1.5)

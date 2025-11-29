@@ -6,7 +6,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from floship_llm import LLM
-from floship_llm.schemas import ToolFunction, ToolParameter
+from floship_llm.schemas import ToolFunction
 
 
 class TestToolSanitization:
@@ -233,7 +233,7 @@ class TestCloudFrontCompatibility:
             )
 
             # Process response
-            result = llm.process_response(mock_response)
+            llm.process_response(mock_response)
 
             # Verify ellipsis was sanitized in the tool message
             tool_messages = [m for m in llm.messages if m.get("role") == "tool"]
@@ -294,7 +294,7 @@ class TestBackwardCompatibility:
 
     def test_existing_tool_execution_still_works(self):
         """Test that existing tool execution patterns still work."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM(enable_tools=True, sanitize_tool_responses=False)
 
             def simple_tool() -> str:

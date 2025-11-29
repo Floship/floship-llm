@@ -162,7 +162,7 @@ def example_3_advanced_tool_chain():
             data = json.loads(json_data)
             filtered = [item for item in data if item.get(field, 0) >= min_value]
             return json.dumps(filtered)
-        except:
+        except Exception:
             return "Error filtering data"
 
     def calculate_average(json_data: str, field: str) -> float:
@@ -171,7 +171,7 @@ def example_3_advanced_tool_chain():
             data = json.loads(json_data)
             values = [item.get(field, 0) for item in data if field in item]
             return sum(values) / len(values) if values else 0
-        except:
+        except Exception:
             return 0
 
     def generate_report(json_data: str, title: str = "Data Report") -> str:
@@ -184,7 +184,7 @@ def example_3_advanced_tool_chain():
             for item in data:
                 report += f"- {item}\n"
             return report
-        except:
+        except Exception:
             return "Error generating report"
 
     # Add all tools

@@ -1,9 +1,6 @@
 """Tests for the utils module."""
 
 import json
-from unittest.mock import patch
-
-import pytest
 
 from floship_llm.utils import JSONUtils, lm_json_utils
 

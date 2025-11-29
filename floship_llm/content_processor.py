@@ -86,7 +86,7 @@ class ContentProcessor:
 
     def process_tool_response(
         self, content: str, tool_name: str, execution_time: Optional[float] = None
-    ) -> Dict:
+    ) -> Dict[str, str | Dict[str, object]]:
         """
         Process tool response with sanitization, truncation, and metadata tracking.
 
@@ -110,7 +110,7 @@ class ContentProcessor:
         truncated, was_truncated = self.truncate_content(sanitized)
 
         # Build result
-        result = {"content": truncated}
+        result: Dict[str, str | Dict[str, object]] = {"content": truncated}
 
         # Add metadata if tracking is enabled
         if self.track_metadata:
@@ -118,7 +118,7 @@ class ContentProcessor:
             final_tokens = estimate_tokens(truncated)
             processing_time = time.time() - start_time
 
-            result["metadata"] = {
+            metadata: Dict[str, object] = {
                 "tool_name": tool_name,
                 "was_sanitized": was_sanitized,
                 "was_truncated": was_truncated,
@@ -131,9 +131,9 @@ class ContentProcessor:
             }
 
             if execution_time is not None:
-                result["metadata"]["execution_time_ms"] = round(
-                    execution_time * 1000, 2
-                )
+                metadata["execution_time_ms"] = round(execution_time * 1000, 2)
+
+            result["metadata"] = metadata
 
             if was_sanitized:
                 logger.debug(f"Tool '{tool_name}' response sanitized")

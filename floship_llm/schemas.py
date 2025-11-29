@@ -77,7 +77,7 @@ class ToolFunction(BaseModel):
     parameters: List[ToolParameter] = Field(
         default=[], description="List of parameters this function accepts."
     )
-    function: Optional[Callable] = Field(
+    function: Optional[Callable[..., object]] = Field(
         default=None, description="The actual Python function to execute."
     )
 
@@ -85,8 +85,8 @@ class ToolFunction(BaseModel):
 
     def to_openai_format(self) -> Dict[str, Any]:
         """Convert tool to OpenAI function calling format."""
-        properties = {}
-        required = []
+        properties: Dict[str, Dict[str, Any]] = {}
+        required: List[str] = []
 
         for param in self.parameters:
             properties[param.name] = {

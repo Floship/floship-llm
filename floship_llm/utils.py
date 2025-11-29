@@ -4,7 +4,7 @@ except ImportError:
     import re
 
 import json
-from typing import Any, List
+from typing import Any, Dict, List
 
 
 class JSONUtils:
@@ -60,12 +60,12 @@ class JSONUtils:
                     continue
         return results
 
-    def strict_json(self, obj: Any, **dump_kwargs) -> str:
+    def strict_json(self, obj: Any, **dump_kwargs: Any) -> str:
         """
         Re-serialize Python object to a canonical JSON string.
         By default, uses sort_keys=True and indent=2.
         """
-        params = {"ensure_ascii": False, "sort_keys": True, "indent": 2}
+        params: Dict[str, Any] = {"ensure_ascii": False, "sort_keys": True, "indent": 2}
         params.update(dump_kwargs)
         return json.dumps(obj, **params)
 

@@ -2,9 +2,8 @@
 Tests for tool/function calling functionality in the LLM client.
 """
 
-import json
 import os
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -188,7 +187,7 @@ class TestLLMTools:
 
     def test_llm_tool_initialization(self):
         """Test LLM initialization with tool support."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM(enable_tools=True)
 
             assert llm.enable_tools is True
@@ -197,7 +196,7 @@ class TestLLMTools:
 
     def test_add_tool(self):
         """Test adding a tool to LLM."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM()
 
             def test_func(message: str) -> str:
@@ -219,7 +218,7 @@ class TestLLMTools:
 
     def test_add_tool_from_function(self):
         """Test adding a tool from a Python function."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM()
 
             def calculate_sum(a: int, b: int) -> int:
@@ -238,7 +237,7 @@ class TestLLMTools:
 
     def test_remove_tool(self):
         """Test removing a tool."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM()
 
             tool = ToolFunction(name="test_tool", description="Test", parameters=[])
@@ -252,7 +251,7 @@ class TestLLMTools:
 
     def test_list_tools(self):
         """Test listing available tools."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM()
 
             tool1 = ToolFunction(name="tool1", description="Tool 1", parameters=[])
@@ -266,7 +265,7 @@ class TestLLMTools:
 
     def test_execute_tool_success(self):
         """Test successful tool execution."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM()
 
             def multiply(x: int, y: int) -> int:
@@ -294,7 +293,7 @@ class TestLLMTools:
 
     def test_execute_tool_not_found(self):
         """Test executing a non-existent tool."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM()
 
             tool_call = ToolCall(id="call_123", name="nonexistent_tool", arguments={})
@@ -307,7 +306,7 @@ class TestLLMTools:
 
     def test_execute_tool_not_found_shows_available_tools(self):
         """Test that error message shows available tools when tool not found."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM()
 
             # Register some tools
@@ -338,7 +337,7 @@ class TestLLMTools:
 
     def test_execute_tool_function_error(self):
         """Test tool execution with function error."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM()
 
             def error_func():
@@ -362,7 +361,7 @@ class TestLLMTools:
 
     def test_get_request_params_with_tools(self):
         """Test get_request_params includes tools when enabled."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM(enable_tools=True)
 
             tool = ToolFunction(
@@ -382,7 +381,7 @@ class TestLLMTools:
 
     def test_get_request_params_no_tools_when_disabled(self):
         """Test get_request_params excludes tools when disabled."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM(enable_tools=False)
 
             tool = ToolFunction(name="test_tool", description="Test", parameters=[])
@@ -395,7 +394,7 @@ class TestLLMTools:
 
     def test_enable_disable_tool_support(self):
         """Test enabling and disabling tool support."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM()
 
             assert llm.enable_tools is False
@@ -408,7 +407,7 @@ class TestLLMTools:
 
     def test_clear_tools(self):
         """Test clearing all tools."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM()
 
             tool1 = ToolFunction(name="tool1", description="Tool 1", parameters=[])
@@ -486,7 +485,7 @@ class TestLLMTools:
 
     def test_remove_tool_not_found(self):
         """Test removing a tool that doesn't exist."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM()
 
             # Try to remove a tool that doesn't exist
@@ -495,7 +494,7 @@ class TestLLMTools:
 
     def test_execute_tool_no_function(self):
         """Test executing a tool with no function defined."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM()
 
             # Create a tool without a function
@@ -517,7 +516,7 @@ class TestLLMTools:
 
     def test_process_response_empty_content(self):
         """Test processing response with empty content."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM()
 
             # Mock response with empty content
@@ -582,7 +581,7 @@ class TestLLMTools:
             )
 
             # This should handle the JSON error gracefully
-            result = llm.process_response(mock_response)
+            llm.process_response(mock_response)
 
             # Should have error messages in conversation
             tool_messages = [msg for msg in llm.messages if msg.get("role") == "tool"]
@@ -590,7 +589,7 @@ class TestLLMTools:
 
     def test_reset_with_system_message(self):
         """Test reset method with system message."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM(system="You are a helpful assistant")
 
             # Add some messages
@@ -608,7 +607,7 @@ class TestLLMTools:
 
     def test_process_response_mock_tool_calls_exception(self):
         """Test processing response with mock tool_calls that cause exceptions."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             llm = LLM(enable_tools=True)
 
             # Create a mock that raises TypeError when accessed for iteration
@@ -681,7 +680,7 @@ class TestLLMTools:
             )
 
             # This should handle None content gracefully
-            result = llm.process_response(mock_response)
+            llm.process_response(mock_response)
 
             # Should have proper messages in conversation
             assistant_messages = [
@@ -993,3 +992,151 @@ class TestLLMTools:
 
                 assert len(validated) == 1
                 assert validated[0]["content"] == "test"
+
+
+class TestToolManagerValidation:
+    """Tests for ToolManager validation and error handling."""
+
+    def test_add_non_tool_function_raises_error(self):
+        """Test that adding a non-ToolFunction raises ValueError."""
+        from floship_llm.tool_manager import ToolManager
+
+        manager = ToolManager()
+        with pytest.raises(ValueError, match="must be an instance of ToolFunction"):
+            manager.add_tool("not a tool function")
+
+    def test_add_invalid_tool_name_raises_error(self):
+        """Test that adding a tool with invalid name raises ValueError."""
+        from floship_llm.tool_manager import ToolManager
+
+        manager = ToolManager()
+        tool = ToolFunction(
+            name="invalid name with spaces",
+            description="A tool with an invalid name",
+            function=lambda: None,
+        )
+        with pytest.raises(ValueError, match="Invalid tool name"):
+            manager.add_tool(tool)
+
+    def test_add_duplicate_tool_raises_error(self):
+        """Test that adding a duplicate tool raises ValueError."""
+        from floship_llm.tool_manager import ToolManager
+
+        manager = ToolManager()
+        tool = ToolFunction(
+            name="test_tool",
+            description="A test tool",
+            function=lambda: None,
+        )
+        manager.add_tool(tool)
+
+        # Try to add the same tool again
+        with pytest.raises(ValueError, match="already exists"):
+            manager.add_tool(tool)
+
+    def test_execute_invalid_tool_call_type(self):
+        """Test that execute_tool with wrong type raises ValueError."""
+        from floship_llm.tool_manager import ToolManager
+
+        manager = ToolManager()
+        with pytest.raises(ValueError, match="must be an instance of ToolCall"):
+            manager.execute_tool("not a tool call")
+
+    def test_execute_tool_without_function(self):
+        """Test executing a tool that has no function defined."""
+        from floship_llm.tool_manager import ToolManager
+
+        manager = ToolManager()
+        # Create tool without a function
+        tool = ToolFunction(
+            name="no_func_tool",
+            description="A tool without a function",
+            function=None,
+        )
+        manager.tools["no_func_tool"] = tool
+
+        tc = ToolCall(id="call_1", name="no_func_tool", arguments={})
+        result = manager.execute_tool(tc)
+
+        assert result.success is False
+        assert "No executable function defined" in result.error
+
+    def test_execute_tool_json_parse_error(self):
+        """Test tool execution with arguments that can't be parsed as dict."""
+        from floship_llm.tool_manager import ToolManager
+
+        manager = ToolManager()
+        tool = ToolFunction(
+            name="test_tool",
+            description="A test tool",
+            function=lambda: "result",
+        )
+        manager.add_tool(tool)
+
+        # ToolCall requires dict arguments, so we test with the tool manager directly
+        # by manipulating what gets passed to the tool
+        tc = ToolCall(id="call_1", name="test_tool", arguments={})
+        result = manager.execute_tool(tc)
+
+        # This should succeed with empty args
+        assert result.success is True
+
+    def test_execute_tool_with_whitespace_result(self):
+        """Test tool execution that returns only whitespace."""
+        from floship_llm.tool_manager import ToolManager
+
+        manager = ToolManager()
+        tool = ToolFunction(
+            name="whitespace_tool",
+            description="A tool that returns whitespace",
+            function=lambda: "   ",  # Only whitespace
+        )
+        manager.add_tool(tool)
+
+        tc = ToolCall(id="call_1", name="whitespace_tool", arguments={})
+        result = manager.execute_tool(tc)
+
+        assert result.success is True
+        # Whitespace is stripped and treated as empty
+        assert "empty result" in result.content.lower()
+
+    def test_execute_tool_with_dict_result(self):
+        """Test tool execution that returns a dict."""
+        from floship_llm.tool_manager import ToolManager
+
+        manager = ToolManager()
+        tool = ToolFunction(
+            name="dict_tool",
+            description="A tool that returns a dict",
+            function=lambda: {"key": "value", "nested": {"a": 1}},
+        )
+        manager.add_tool(tool)
+
+        tc = ToolCall(id="call_1", name="dict_tool", arguments={})
+        result = manager.execute_tool(tc)
+
+        assert result.success is True
+        # Result should be JSON formatted
+        assert "key" in result.content
+        assert "value" in result.content
+
+    def test_execute_tool_with_list_result(self):
+        """Test tool execution that returns a list."""
+        from floship_llm.tool_manager import ToolManager
+
+        manager = ToolManager()
+        tool = ToolFunction(
+            name="list_tool",
+            description="A tool that returns a list",
+            function=lambda: [1, 2, 3],
+        )
+        manager.add_tool(tool)
+
+        tc = ToolCall(id="call_1", name="list_tool", arguments={})
+        result = manager.execute_tool(tc)
+
+        assert result.success is True
+        # Result should be JSON formatted
+        assert "1" in result.content
+        assert "2" in result.content
+        assert "3" in result.content

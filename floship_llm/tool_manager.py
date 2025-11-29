@@ -4,9 +4,9 @@ import json
 import logging
 import re
 import time
-from typing import Any, Callable, Dict, List, Optional
+from typing import Callable, Dict, List, Optional
 
-from .schemas import ToolCall, ToolFunction, ToolResult
+from .schemas import ToolCall, ToolFunction, ToolParameter, ToolResult
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ TOOL_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9_-]+$")
 class ToolManager:
     """Manages tool registration, validation, and execution."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize tool manager."""
         self.tools: Dict[str, ToolFunction] = {}
 
@@ -62,10 +62,10 @@ class ToolManager:
 
     def add_tool_from_function(
         self,
-        func: Callable,
+        func: Callable[..., object],
         name: Optional[str] = None,
         description: Optional[str] = None,
-        parameters: Optional[List] = None,
+        parameters: Optional[List[ToolParameter]] = None,
     ) -> None:
         """
         Register a Python function as a tool.
@@ -258,11 +258,10 @@ class ToolManager:
                 name=tool_call.name,
                 content=content,
                 success=True,
-                execution_time=execution_time,
             )
 
         except json.JSONDecodeError as e:
-            error_msg = f"Failed to parse tool arguments: {str(e)}"
+            error_msg = f"Failed to parse tool arguments: {e!s}"
             logger.error(f"Tool '{tool_call.name}': {error_msg}")
             return ToolResult(
                 tool_call_id=tool_call.id,

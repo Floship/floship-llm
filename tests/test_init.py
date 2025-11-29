@@ -1,7 +1,5 @@
 """Tests for the __init__ module."""
 
-import pytest
-
 import floship_llm
 from floship_llm import (
     LLM,

@@ -5,7 +5,7 @@ Tests the /v1/embeddings endpoint functionality.
 """
 
 import os
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 

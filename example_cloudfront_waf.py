@@ -7,6 +7,7 @@ patterns that resemble security attacks.
 """
 
 import os
+import sys
 
 from floship_llm import LLM, LLMConfig
 
@@ -23,7 +24,7 @@ if not all(
     print('export INFERENCE_URL="https://us.inference.heroku.com"')
     print('export INFERENCE_MODEL_ID="claude-4-sonnet"')
     print('export INFERENCE_KEY="your-api-key"')
-    exit(1)
+    sys.exit(1)
 
 
 def example_1_basic_waf_protection():
@@ -49,14 +50,14 @@ def example_1_basic_waf_protection():
     print("\n🛡️  Sending with automatic WAF protection...")
     try:
         response = llm.prompt(suspicious_content)
-        print(f"\n✅ Success! Response received:")
+        print("\n✅ Success! Response received:")
         print(f"{response[:200]}...")
     except Exception as e:
         print(f"\n❌ Error: {e}")
 
     # Check metrics
     metrics = llm.get_waf_metrics()
-    print(f"\n📊 Metrics:")
+    print("\n📊 Metrics:")
     print(f"   Total requests: {metrics['total_requests']}")
     print(f"   Sanitization rate: {metrics['sanitization_rate']:.1%}")
 
@@ -87,7 +88,7 @@ def example_2_pr_diff_review():
     print("\n🛡️  Sending with automatic WAF protection...")
     try:
         response = llm.prompt(f"Review this security fix:\n{pr_diff}")
-        print(f"\n✅ Success! Response received:")
+        print("\n✅ Success! Response received:")
         print(f"{response[:200]}...")
     except Exception as e:
         print(f"\n❌ Error: {e}")
@@ -117,7 +118,7 @@ def example_3_custom_config():
 
     try:
         response = llm.prompt(f"Explain what's in this file:\n{content}")
-        print(f"\n✅ Success! Response received:")
+        print("\n✅ Success! Response received:")
         print(f"{response[:150]}...")
     except Exception as e:
         print(f"\n❌ Error: {e}")
@@ -144,7 +145,7 @@ def example_4_disable_waf():
 
     try:
         response = llm.prompt(safe_content)
-        print(f"\n✅ Success! Response received:")
+        print("\n✅ Success! Response received:")
         print(f"{response[:150]}...")
     except Exception as e:
         print(f"\n❌ Error: {e}")

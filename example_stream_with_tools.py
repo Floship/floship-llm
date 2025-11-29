@@ -54,7 +54,7 @@ def calculate(expression: str):
         )
         return str(result)
     except Exception as e:
-        return f"Error: {str(e)}"
+        return f"Error: {e!s}"
 
 
 def example_1_basic_streaming_with_tools():

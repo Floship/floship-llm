@@ -1,8 +1,7 @@
 """Tests for API retry logic."""
 
 import os
-import time
-from unittest.mock import MagicMock, Mock, patch
+from unittest.mock import Mock, patch
 
 import pytest
 from openai import APIConnectionError, APIStatusError, RateLimitError

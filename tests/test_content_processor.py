@@ -1,9 +1,5 @@
 """Tests for content_processor module."""
 
-from unittest.mock import patch
-
-import pytest
-
 from floship_llm.content_processor import ContentProcessor
 
 

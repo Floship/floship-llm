@@ -5,7 +5,9 @@ This demonstrates the /v1/embeddings endpoint support.
 See: https://devcenter.heroku.com/articles/heroku-inference-api-v1-embeddings
 """
 
+import importlib.util
 import os
+import sys
 
 from floship_llm import LLM
 
@@ -79,19 +81,19 @@ def example_with_full_response():
     response = llm.embed(text, return_full_response=True)
 
     print(f"Text: {text}")
-    print(f"\nFull Response Structure:")
+    print("\nFull Response Structure:")
     print(f"  Object type: {response['object']}")
     print(f"  Model used: {response['model']}")
     print(f"  Number of embeddings: {len(response['data'])}")
 
     if response["usage"]:
-        print(f"\nToken Usage:")
+        print("\nToken Usage:")
         print(f"  Prompt tokens: {response['usage']['prompt_tokens']}")
         print(f"  Total tokens: {response['usage']['total_tokens']}")
 
     # Access the actual embedding
     embedding = response["data"][0]["embedding"]
-    print(f"\nEmbedding Details:")
+    print("\nEmbedding Details:")
     print(f"  Dimension: {len(embedding)}")
     print(f"  Index: {response['data'][0]['index']}")
 
@@ -281,7 +283,7 @@ if __name__ == "__main__":
         print(
             "  eval $(heroku config -a $APP_NAME --shell | grep '^INFERENCE_' | sed 's/^/export /' | tee >(cat >&2))"
         )
-        exit(1)
+        sys.exit(1)
 
     print("=" * 60)
     print("Heroku Inference API - Embeddings Examples")
@@ -298,11 +300,9 @@ if __name__ == "__main__":
         example_clustering()
 
         # Check if numpy is available for similarity search
-        try:
-            import numpy as np
-
+        if importlib.util.find_spec("numpy") is not None:
             example_similarity_search()
-        except ImportError:
+        else:
             print("\n" + "=" * 60)
             print("Skipping similarity search example (numpy not installed)")
             print("Install with: pip install numpy")

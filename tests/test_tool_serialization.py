@@ -28,7 +28,7 @@ class TestToolSerialization:
 
     def test_tool_parameter_serialization_in_request(self):
         """Test that ToolParameter objects are converted to dicts before JSON serialization."""
-        with patch("floship_llm.client.OpenAI") as mock_openai:
+        with patch("floship_llm.client.OpenAI"):
             # Create LLM with tools enabled
             llm = LLM(enable_tools=True)
 
