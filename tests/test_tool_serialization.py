@@ -80,9 +80,9 @@ class TestToolSerialization:
 
             # Parameters should be a dict, not a list of ToolParameter objects
             parameters = tool_schema["function"]["parameters"]
-            assert isinstance(
-                parameters, dict
-            ), f"Expected dict, got {type(parameters)}"
+            assert isinstance(parameters, dict), (
+                f"Expected dict, got {type(parameters)}"
+            )
             assert "type" in parameters
             assert parameters["type"] == "object"
             assert "properties" in parameters

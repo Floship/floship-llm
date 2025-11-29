@@ -852,9 +852,9 @@ class TestLLMTools:
 
             for content, expected in test_cases:
                 result = llm._sanitize_tool_content(content, "test_tool")
-                assert (
-                    result == expected
-                ), f"Failed for content '{content}': got '{result}', expected '{expected}'"
+                assert result == expected, (
+                    f"Failed for content '{content}': got '{result}', expected '{expected}'"
+                )
 
             # Test error cases
             error_cases = [
@@ -865,9 +865,9 @@ class TestLLMTools:
 
             for content, expected in error_cases:
                 result = llm._sanitize_tool_content(content, "test_tool", is_error=True)
-                assert (
-                    result == expected
-                ), f"Failed for error content '{content}': got '{result}', expected '{expected}'"
+                assert result == expected, (
+                    f"Failed for error content '{content}': got '{result}', expected '{expected}'"
+                )
 
     def test_execute_tool_with_problematic_results(self):
         """Test execute_tool method with various problematic return values."""

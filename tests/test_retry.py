@@ -302,9 +302,9 @@ class TestAPIRetry:
                 with pytest.raises(APIStatusError):
                     llm.prompt("Test prompt")
 
-                assert (
-                    call_count == 1
-                ), f"Status code {status_code} should not be retried"
+                assert call_count == 1, (
+                    f"Status code {status_code} should not be retried"
+                )
 
     def test_embed_with_retry(self):
         """Test that embed method also uses retry logic."""

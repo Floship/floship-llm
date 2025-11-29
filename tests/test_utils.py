@@ -503,9 +503,9 @@ Done."""
 
         # Should return empty string since the outer JSON is incomplete
         # It should NOT return the nested decision_tree object
-        assert (
-            result == ""
-        ), f"Expected empty string for truncated JSON, got: {result[:100]}..."
+        assert result == "", (
+            f"Expected empty string for truncated JSON, got: {result[:100]}..."
+        )
 
     def test_extract_strict_json_truncated_without_code_block(self):
         """Test truncated JSON without code block also returns empty."""
@@ -520,9 +520,9 @@ Done."""
         result = utils.extract_strict_json(truncated_json)
 
         # Should return empty since outer JSON is incomplete
-        assert (
-            result == ""
-        ), f"Expected empty string for truncated JSON, got: {result[:100]}..."
+        assert result == "", (
+            f"Expected empty string for truncated JSON, got: {result[:100]}..."
+        )
 
     def test_is_truncated_json_unbalanced_braces(self):
         """Test is_truncated_json detects unbalanced braces."""
@@ -586,9 +586,9 @@ Done."""
             '{"list": [1, 2, {"inner": true}]}',
         ]
         for example in complete_examples:
-            assert (
-                utils.is_truncated_json(example) is False
-            ), f"Expected False for: {example}"
+            assert utils.is_truncated_json(example) is False, (
+                f"Expected False for: {example}"
+            )
 
 
 class TestGlobalJSONUtilsInstance:

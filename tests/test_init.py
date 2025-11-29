@@ -13,12 +13,16 @@ from floship_llm import (
     lm_json_utils,
 )
 from floship_llm.client import LLM as ClientLLM
-from floship_llm.schemas import Labels as SchemasLabels
-from floship_llm.schemas import Suggestion as SchemasSuggestion
-from floship_llm.schemas import SuggestionsResponse as SchemasSuggestionsResponse
-from floship_llm.schemas import ThinkingModel as SchemasThinkingModel
-from floship_llm.utils import JSONUtils as UtilsJSONUtils
-from floship_llm.utils import lm_json_utils as utils_lm_json_utils
+from floship_llm.schemas import (
+    Labels as SchemasLabels,
+    Suggestion as SchemasSuggestion,
+    SuggestionsResponse as SchemasSuggestionsResponse,
+    ThinkingModel as SchemasThinkingModel,
+)
+from floship_llm.utils import (
+    JSONUtils as UtilsJSONUtils,
+    lm_json_utils as utils_lm_json_utils,
+)
 
 
 class TestModuleImports:
@@ -230,9 +234,9 @@ class TestWildcardImports:
     def test_no_private_exports_in_all(self):
         """Test that __all__ doesn't contain private attributes."""
         for item in __all__:
-            assert not item.startswith(
-                "_"
-            ), f"Private attribute '{item}' found in __all__"
+            assert not item.startswith("_"), (
+                f"Private attribute '{item}' found in __all__"
+            )
 
     def test_all_matches_actual_exports(self):
         """Test that __all__ matches what's actually exported."""
@@ -245,9 +249,9 @@ class TestWildcardImports:
 
         # __all__ should be a subset of actual exports
         for item in __all__:
-            assert (
-                item in actual_exports
-            ), f"'{item}' in __all__ but not actually exported"
+            assert item in actual_exports, (
+                f"'{item}' in __all__ but not actually exported"
+            )
 
 
 class TestModuleStructure:

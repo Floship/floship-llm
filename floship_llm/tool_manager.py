@@ -4,7 +4,7 @@ import json
 import logging
 import re
 import time
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .schemas import ToolCall, ToolFunction, ToolParameter, ToolResult
 
@@ -285,14 +285,14 @@ class ToolManager:
                 error=error_msg,
             )
 
-    def get_tools_schema(self) -> List[Dict]:
+    def get_tools_schema(self) -> List[Dict[str, Any]]:
         """
         Get OpenAI tools schema for all registered tools.
 
         Returns:
             List of tool schemas in OpenAI format (JSON-serializable)
         """
-        schemas: List[Dict] = []
+        schemas: List[Dict[str, Any]] = []
 
         for tool in self.tools.values():
             if not TOOL_NAME_PATTERN.match(tool.name):

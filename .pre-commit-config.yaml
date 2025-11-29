@@ -13,7 +13,7 @@ repos:
 
   # Pre-commit built-in hooks
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       # Security checks
       - id: detect-private-key
@@ -53,43 +53,19 @@ repos:
         args: ['--pytest-test-first']
         exclude: ^tests/(conftest\.py|__init__\.py)$
 
-  # Python formatting with Black
-  - repo: https://github.com/psf/black
-    rev: 25.9.0
+  # Ruff - Fast Python linter and formatter (replaces black, isort, flake8, pylint)
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.7
     hooks:
-      - id: black
-        name: ⬛ Format with Black
-        language_version: python3.11
-
-  # Import sorting with isort
-  - repo: https://github.com/PyCQA/isort
-    rev: 7.0.0
-    hooks:
-      - id: isort
-        name: 📦 Sort imports with isort
-        args: ["--profile", "black"]
-
-  # Linting with flake8
-  - repo: https://github.com/PyCQA/flake8
-    rev: 7.3.0
-    hooks:
-      - id: flake8
-        name: 🔍 Lint with flake8
-        args: [
-          '--max-line-length=120',
-          '--extend-ignore=E203,W503,E501,D,F401,F841,E722,E402,F541,C901,B017,B023,SIM102,SIM105,SIM114,SIM117,SIM910',
-          '--max-complexity=20',
-          '--per-file-ignores=__init__.py:F401,tests/*:F401,F841,B017,SIM117',
-        ]
-        additional_dependencies: [
-          'flake8-bugbear',        # Find likely bugs and design problems
-          'flake8-comprehensions',  # Better list/dict comprehensions
-          'flake8-simplify',        # Simplify code suggestions
-        ]
+      - id: ruff
+        name: 🔍 Lint with Ruff
+        args: [--fix]
+      - id: ruff-format
+        name: ⬛ Format with Ruff
 
   # Security scanning with bandit
   - repo: https://github.com/PyCQA/bandit
-    rev: 1.8.0
+    rev: 1.9.2
     hooks:
       - id: bandit
         name: 🛡️  Security scan with bandit
@@ -97,68 +73,29 @@ repos:
         additional_dependencies: ['bandit[toml]']
         exclude: ^tests/
 
-  # Docstring checking with pydocstyle
-  - repo: https://github.com/PyCQA/pydocstyle
-    rev: 6.3.0
+  # Type checking with mypy
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.19.0
     hooks:
-      - id: pydocstyle
-        name: 📖 Check docstrings with pydocstyle
+      - id: mypy
+        name: 🔍 Type check with mypy
         args: [
-          '--convention=google',
-          '--add-ignore=D100,D101,D102,D103,D104,D105,D107,D205,D212,D415',
+          '--ignore-missing-imports',
         ]
-        exclude: ^(tests/|examples)
-
-  # Type checking with mypy (optional - requires type annotations)
-  # Uncomment to enable strict type checking:
-  # - repo: https://github.com/pre-commit/mirrors-mypy
-  #   rev: v1.18.2
-  #   hooks:
-  #     - id: mypy
-  #       name: 🔍 Type check with mypy
-  #       args: [
-  #         '--ignore-missing-imports',
-  #         '--allow-untyped-defs',
-  #         '--allow-incomplete-defs',
-  #         '--no-warn-unused-ignores',
-  #       ]
-  #       additional_dependencies: [
-  #         types-requests,
-  #         pydantic,
-  #         openai,
-  #       ]
-  #       exclude: ^(tests/|examples|test_retry)
-
-  # Code quality with pylint (more strict)
-  - repo: https://github.com/PyCQA/pylint
-    rev: v3.3.3
-    hooks:
-      - id: pylint
-        name: 🔬 Analyze with pylint
-        args: [
-          '--max-line-length=120',
-          '--disable=C0103,C0114,C0115,C0116,C0301,C0302,C0415,E0401,R0912,R0913,R0914,R0915,R0917,R0903,R0902,R0904,R1705,R1710,R1722,R1723,R1724,W0201,W0212,W0611,W0612,W0621,W0613,W0622,W0640,W0707,W0718,W0123,W1203,W1309',
-          '--good-names=i,j,k,x,y,z,id,tc,llm,_,e,np',
-          '--min-similarity-lines=10',
-          '--max-args=10',
+        additional_dependencies: [
+          types-requests,
+          pydantic,
+          openai,
         ]
+        files: ^floship_llm/
         exclude: ^(tests/|examples)
-
-  # Dead code detection (optional - may flag public API methods)
-  # Uncomment to enable:
-  # - repo: https://github.com/asottile/dead
-  #   rev: v1.5.2
-  #   hooks:
-  #     - id: dead
-  #       name: 💀 Check for dead code
-  #       exclude: ^(tests/|examples)
 
   # Check requirements.txt
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v5.0.0
+    rev: v6.0.0
     hooks:
       - id: requirements-txt-fixer
-        name: � Fix requirements.txt
+        name: 📋 Fix requirements.txt
 
   # UV lock file sync - ensure uv.lock is up to date with pyproject.toml
   - repo: local
