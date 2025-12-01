@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.19] - 2025-12-01
+
+### Fixed
+- **CloudFront WAF Coverage:** Sanitizes Django/Jinja template tags to avoid CloudFront 403 blocks on PR diffs containing `{% %}` blocks.
+
 ## [0.5.18] - 2025-12-01
 
 ### Fixed

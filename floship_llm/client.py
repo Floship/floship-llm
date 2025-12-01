@@ -185,6 +185,10 @@ class CloudFrontWAFSanitizer:
             (r'\}"\}\}', '}"}[TEMPLATE_CLOSE]'),
             (r"\}\}\]", ")[TEMPLATE_CLOSE]"),
         ],
+        "template_tags": [
+            # Django/Jinja template tags like {% for item in list %}
+            (r"\{\%-?\s*([^%]+?)\s*-?\%\}", r"[DJANGO_TAG:\1]"),
+        ],
         "path_traversal": [
             (r"\.\./", "[PARENT_DIR]/"),
             (r"\.\.[/\\]", "[PARENT_DIR]/"),
@@ -237,6 +241,8 @@ class CloudFrontWAFSanitizer:
         "on_load=": "onload=",
         "[URL_TEMPLATE]": "{/...}",
         "filter_Q(": "filter=Q(",
+        # Restore Django/Jinja template tags
+        "[DJANGO_TAG:": "{% ",  # handled via regex in desanitize
     }
 
     @classmethod
@@ -281,6 +287,18 @@ class CloudFrontWAFSanitizer:
         """
         desanitized = content
         was_desanitized = False
+
+        # Handle dynamic Django/Jinja template tag placeholders first
+        def _restore_django_tag(match: re.Match) -> str:
+            tag_body = match.group(1).strip()
+            return f"{{% {tag_body} %}}"
+
+        desanitized_new = re.sub(
+            r"\[DJANGO_TAG:([^\]]+)\]", _restore_django_tag, desanitized
+        )
+        if desanitized_new != desanitized:
+            was_desanitized = True
+            desanitized = desanitized_new
 
         for sanitized_pattern, original in cls.REVERSE_MAPPINGS.items():
             if sanitized_pattern in desanitized:

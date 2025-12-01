@@ -230,6 +230,28 @@ class TestCloudFrontWAFSanitizer:
         assert "!screenshot.jpg!" not in sanitized
         assert "[IMAGE:screenshot.jpg]" in sanitized
 
+    def test_django_template_tags(self):
+        """Test Django/Jinja template tags are sanitized to avoid WAF triggers."""
+        content = """
+        {% block content %}
+          {% for item in pending_fulfillment %}
+            {{ item.client }} - {{ item.orders_count }}
+          {% endfor %}
+        {% endblock %}
+        """
+
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized
+        assert "{%" not in sanitized
+        assert "{{" not in sanitized
+        assert "[DJANGO_TAG:" in sanitized
+
+        # Ensure desanitize restores template tags
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(sanitized)
+        assert was_desanitized
+        assert "{% block content %}" in desanitized
+        assert "{% endfor %}" in desanitized
+
     def test_django_orm_filter_q_pattern(self):
         """Test Django ORM filter=Q pattern that triggers CloudFront WAF."""
         content = """
