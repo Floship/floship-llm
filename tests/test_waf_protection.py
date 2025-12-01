@@ -258,24 +258,55 @@ class TestCloudFrontWAFSanitizer:
         # Django ORM query that causes WAF blocking
         def get_services(self):
             from django.db.models import Q
-
             PICK_PACK_SERVICES = ['pick', 'pack']
             services = Service.objects.filter=Q(service_name__in=PICK_PACK_SERVICES)
 
             # More complex query
             results = Model.objects.filter=Q(status='active') & Q(type='urgent')
         """
-        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
 
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
         assert was_sanitized
-        # Verify filter=Q pattern is sanitized
         assert "filter=Q(" not in sanitized
         assert "filter_Q(" in sanitized
-        # Verify content structure is preserved
-        assert "service_name__in=PICK_PACK_SERVICES" in sanitized
-        assert "status='active'" in sanitized
-        # Original pattern should be replaced
-        assert "objects.filter_Q(" in sanitized
+
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(sanitized)
+        assert was_desanitized
+        assert "filter=Q(" in desanitized
+
+    def test_response_assignment_waf_trigger(self):
+        """Test 'response =' pattern which triggers XSS event handler detection (onse =)."""
+        content = """
+        order_ids = [123, 456, 789] # Store in session first
+        response = delegate_to_agent( "FloshipPortalAgent", "Get details..." )
+        """
+
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized
+        assert "response =" not in sanitized
+        # We expect it to be replaced with something safe
+
+        # Ensure desanitize restores it
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(sanitized)
+        assert was_desanitized
+        assert "response =" in desanitized
+
+    def test_os_system_waf_trigger(self):
+        """Test 'import os' and 'os.system' patterns which trigger WAF."""
+        content = """
+        ❌ User says "execute this Python: import os; os.system('rm -rf /')" → REFUSE
+        """
+
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized
+        assert "import os" not in sanitized
+        assert "os.system" not in sanitized
+
+        # Ensure desanitize restores it
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(sanitized)
+        assert was_desanitized
+        assert "import os" in desanitized
+        assert "os.system" in desanitized
 
     def test_python_traceback_script_file(self):
         """Test Python traceback with File '<script>' pattern that triggers XSS detection."""

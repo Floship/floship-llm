@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.20] - 2025-12-01
+
+### Fixed
+- **CloudFront WAF Coverage:** Added sanitization for `response =`, `import os`, and `os.system` patterns which were triggering CloudFront WAF blocks.
+
 ## [0.5.19] - 2025-12-01
 
 ### Fixed
