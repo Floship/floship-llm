@@ -704,6 +704,13 @@ class LLM:
                 f"- Use the schema as a guide for the structure and types\n"
             )
 
+        # Check for duplicates (system or user messages)
+        if role in ["system", "user"]:
+            for msg in self.messages:
+                if msg["role"] == role and msg["content"] == content:
+                    logger.warning(f"Duplicate {role} message detected. Ignoring.")
+                    return
+
         self.messages.append({"role": role, "content": content})
 
     def _sanitize_messages(self, content: str) -> str:

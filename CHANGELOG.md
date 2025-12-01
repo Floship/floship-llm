@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.18] - 2025-12-01
+
+### Fixed
+- **Duplicate Message Handling:** Fixed an issue where system prompts were duplicated in continuous mode.
+- **Duplicate Message Prevention:** Added logic to ignore duplicate system or user messages and log a warning instead of adding them to the conversation history.
+
 ## [0.5.17] - 2025-12-01
 
 ### Added
