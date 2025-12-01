@@ -50,11 +50,11 @@ class TestRetryHandler:
         assert result == "success"
         assert mock_func.call_count == 2
 
-    def test_execute_retry_on_500_error(self):
-        """Test retry on 500 server error."""
+    def test_execute_retry_on_503_error(self):
+        """Test retry on 503 server error."""
         handler = RetryHandler()
         mock_response = Mock()
-        mock_response.status_code = 500
+        mock_response.status_code = 503
 
         mock_func = Mock(
             side_effect=[
@@ -104,9 +104,9 @@ class TestRetryHandler:
         """Test that max retries are respected."""
         handler = RetryHandler(max_retries=3)
         mock_response = Mock()
-        mock_response.status_code = 500
+        mock_response.status_code = 503
 
-        error = APIStatusError("Server error", response=mock_response, body={})
+        error = APIStatusError("Service Unavailable", response=mock_response, body={})
         mock_func = Mock(side_effect=error)
 
         with patch("time.sleep"):
@@ -120,9 +120,9 @@ class TestRetryHandler:
         """Test linear backoff delays."""
         handler = RetryHandler(max_retries=3, base_delay=2.0)
         mock_response = Mock()
-        mock_response.status_code = 500
+        mock_response.status_code = 503
 
-        error = APIStatusError("Server error", response=mock_response, body={})
+        error = APIStatusError("Service Unavailable", response=mock_response, body={})
         mock_func = Mock(side_effect=error)
 
         with patch("time.sleep") as mock_sleep:
@@ -190,7 +190,7 @@ class TestRetryHandler:
 
     def test_retryable_status_codes(self):
         """Test all retryable status codes."""
-        retryable_codes = [429, 500, 502, 503, 504]
+        retryable_codes = [429, 502, 503, 504]
 
         for status_code in retryable_codes:
             handler = RetryHandler()
@@ -214,7 +214,7 @@ class TestRetryHandler:
 
     def test_non_retryable_status_codes(self):
         """Test all non-retryable status codes."""
-        non_retryable_codes = [400, 401, 403, 404]
+        non_retryable_codes = [400, 401, 403, 404, 500]
 
         for status_code in non_retryable_codes:
             handler = RetryHandler()
@@ -231,3 +231,19 @@ class TestRetryHandler:
 
             # Should only try once
             assert mock_func.call_count == 1
+
+    def test_no_retry_on_500(self):
+        """Test that 500 errors are not retried."""
+        handler = RetryHandler(max_retries=3)
+        mock_response = Mock()
+        mock_response.status_code = 500
+
+        error = APIStatusError("Server error", response=mock_response, body={})
+        mock_func = Mock(side_effect=error)
+
+        with patch("time.sleep"):
+            with pytest.raises(APIStatusError):
+                handler.execute_with_retry(mock_func)
+
+        # Should be 1 (no retries)
+        assert mock_func.call_count == 1

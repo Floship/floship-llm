@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.16] - 2025-12-01
+
+### Changed
+- **Retry Logic:** Updated retry handler to treat HTTP 500 (Internal Server Error) as non-retryable. Previously it was retried, then limited to 1 retry, now it fails immediately.
+
 ## [0.5.15] - 2025-11-28
 
 ### Added

@@ -111,8 +111,8 @@ class TestAPIRetry:
             assert call_count == 2
             assert result == "Success"
 
-    def test_api_call_with_retry_500_error(self):
-        """Test retry on 500 Server Error."""
+    def test_api_call_with_retry_503_error(self):
+        """Test retry on 503 Server Error."""
         with patch("floship_llm.client.OpenAI") as mock_openai:
             llm = LLM()
 
@@ -126,9 +126,9 @@ class TestAPIRetry:
                 call_count += 1
                 if call_count == 1:
                     raise APIStatusError(
-                        message="Internal server error",
-                        response=Mock(status_code=500),
-                        body={"error": "Internal server error"},
+                        message="Service Unavailable",
+                        response=Mock(status_code=503),
+                        body={"error": "Service Unavailable"},
                     )
                 return mock_stream
 
@@ -178,9 +178,9 @@ class TestAPIRetry:
                 nonlocal call_count
                 call_count += 1
                 raise APIStatusError(
-                    message="Server error",
-                    response=Mock(status_code=500),
-                    body={"error": "Server error"},
+                    message="Service Unavailable",
+                    response=Mock(status_code=503),
+                    body={"error": "Service Unavailable"},
                 )
 
             mock_openai.return_value.chat.completions.create = mock_create
@@ -231,9 +231,9 @@ class TestAPIRetry:
                 call_count += 1
                 if call_count <= 2:
                     raise APIStatusError(
-                        message="Server error",
-                        response=Mock(status_code=500),
-                        body={"error": "Server error"},
+                        message="Service Unavailable",
+                        response=Mock(status_code=503),
+                        body={"error": "Service Unavailable"},
                     )
                 return mock_stream
 
@@ -251,8 +251,8 @@ class TestAPIRetry:
 
     def test_api_call_with_retry_all_status_codes(self):
         """Test retry behavior for various status codes."""
-        retryable_codes = [429, 500, 502, 503, 504]
-        non_retryable_codes = [400, 401, 403, 404]
+        retryable_codes = [429, 502, 503, 504]
+        non_retryable_codes = [400, 401, 403, 404, 500]
 
         def create_handler(code, stream_response):
             state = {"call_count": 0}
@@ -326,9 +326,9 @@ class TestAPIRetry:
                 call_count += 1
                 if call_count == 1:
                     raise APIStatusError(
-                        message="Server error",
-                        response=Mock(status_code=500),
-                        body={"error": "Server error"},
+                        message="Service Unavailable",
+                        response=Mock(status_code=503),
+                        body={"error": "Service Unavailable"},
                     )
                 return mock_embedding
 

@@ -13,10 +13,10 @@ class RetryHandler:
     """Handles retry logic for API calls with configurable backoff."""
 
     # Retryable status codes (transient errors that may succeed on retry)
-    RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+    RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
 
     # Non-retryable status codes (permanent errors or CloudFront WAF blocks)
-    NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404}
+    NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404, 500}
 
     def __init__(self, max_retries: int = 3, base_delay: float = 5.0):
         """
