@@ -89,6 +89,17 @@ class TestLLM:
                 api_key="test-key", base_url="https://test-api.example.com"
             )
 
+    def test_init_with_custom_api_key(self):
+        """Test LLM initialization with custom API key."""
+        custom_key = "custom-api-key"
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            llm = LLM(api_key=custom_key)
+
+            assert llm.api_key == custom_key
+            mock_openai.assert_called_once_with(
+                api_key=custom_key, base_url="https://test-api.example.com"
+            )
+
     def test_init_with_custom_parameters(self):
         """Test LLM initialization with custom parameters."""
         with patch("floship_llm.client.OpenAI"):

@@ -351,6 +351,7 @@ class LLM:
         Initialize LLM client for Heroku Inference API.
 
         Args:
+            api_key: API key for authentication (defaults to INFERENCE_KEY env var)
             type: 'completion' or 'embedding' (default: 'completion')
             model: Model ID (defaults to INFERENCE_MODEL_ID env var)
             temperature: Sampling temperature, 0.0-1.0 (default: 0.15)
@@ -429,9 +430,13 @@ class LLM:
 
         # Initialize OpenAI client
         self.base_url = os.environ["INFERENCE_URL"]
-        self.client = OpenAI(
-            api_key=os.environ["INFERENCE_KEY"], base_url=self.base_url
-        )
+        self.api_key = kwargs.get("api_key", os.environ.get("INFERENCE_KEY"))
+        if not self.api_key:
+            raise ValueError(
+                "API key must be provided via api_key parameter or INFERENCE_KEY environment variable"
+            )
+
+        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
         # Model configuration
         self.model = kwargs.get("model", os.environ["INFERENCE_MODEL_ID"])

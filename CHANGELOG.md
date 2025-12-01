@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.21] - 2025-12-01
+
+### Fixed
+- **API Key Handling:** Fixed a bug where the `api_key` parameter passed to the `LLM` constructor was ignored in favor of the `INFERENCE_KEY` environment variable.
+
 ## [0.5.20] - 2025-12-01
 
 ### Fixed
