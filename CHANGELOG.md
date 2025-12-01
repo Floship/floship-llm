@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.17] - 2025-12-01
+
+### Added
+- **Verbosity Control:** Added `verbosity` parameter to `LLM` class constructor.
+  - Level 0 (default): Normal logging.
+  - Level 1: Verbose logging (automatically set if `debug_mode=True`).
+  - Level 2: Debug logging including full request data (params, messages, inputs).
+
 ## [0.5.16] - 2025-12-01
 
 ### Changed

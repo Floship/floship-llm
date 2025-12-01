@@ -352,6 +352,7 @@ class LLM:
             enable_waf_sanitization: Auto-sanitize content to prevent CloudFront WAF blocking (default: True)
             waf_config: LLMConfig instance for WAF protection settings (default: None, uses defaults)
             debug_mode: Enable detailed request/response logging (default: False)
+            verbosity: Logging verbosity level (0=normal, 1=verbose, 2=debug/all data) (default: 0)
 
             Embeddings Parameters (when type='embedding'):
             input_type: Type of input - 'search_document', 'search_query', 'classification', 'clustering' (default: None)
@@ -388,6 +389,12 @@ class LLM:
             self.waf_config.enable_waf_sanitization = kwargs["enable_waf_sanitization"]
         if "debug_mode" in kwargs:
             self.waf_config.debug_mode = kwargs["debug_mode"]
+
+        # Verbosity level
+        self.verbosity = kwargs.get("verbosity", 0)
+        # If debug_mode is on, ensure verbosity is at least 1
+        if self.waf_config.debug_mode and self.verbosity < 1:
+            self.verbosity = 1
 
         # Basic configuration
         self.type = kwargs.get("type", "completion")
@@ -901,6 +908,11 @@ class LLM:
         params = self.get_embedding_params()
         logger.info(f"Generating embeddings with parameters: {params}")
 
+        if self.verbosity >= 2:
+            logger.debug("FULL EMBEDDING REQUEST DATA:")
+            logger.debug(f"Params: {json.dumps(params, default=str)}")
+            logger.debug(f"Input: {json.dumps(input, default=str)}")
+
         # Track metrics
         self.waf_metrics.total_requests += 1
 
@@ -1081,6 +1093,13 @@ class LLM:
 
                     # Validate messages before sending
                     validated_messages = self._validate_messages_for_api(self.messages)
+
+                    if self.verbosity >= 2:
+                        logger.debug("FULL REQUEST DATA:")
+                        logger.debug(f"Params: {json.dumps(params, default=str)}")
+                        logger.debug(
+                            f"Messages: {json.dumps(validated_messages, default=str)}"
+                        )
 
                     if use_streaming:
                         # Use streaming to prevent Heroku 408 timeouts
