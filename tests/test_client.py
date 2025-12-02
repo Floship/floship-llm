@@ -836,6 +836,39 @@ class TestLLM:
             # Should reset after streaming
             assert len(llm.messages) == 0
 
+    def test_prompt_disables_extended_thinking_on_validation_error(self):
+        """Retry without extended thinking when the API rejects thinking payload."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            call_count = 0
+
+            def mock_create(**kwargs):
+                nonlocal call_count
+                call_count += 1
+                if call_count == 1:
+                    # Simulate Claude extended thinking validation failure
+                    class FakeValidationError(Exception):
+                        status_code = 400
+
+                        def __str__(self):
+                            return "ValidationException: Expected `thinking` block"
+
+                    raise FakeValidationError()
+
+                mock_chunk = Mock()
+                mock_chunk.choices = [Mock(delta=Mock(content="Hello"))]
+                return iter([mock_chunk])
+
+            mock_client = mock_openai.return_value
+            mock_client.chat.completions.create = mock_create
+
+            llm = LLM(extended_thinking={"enabled": True})
+
+            response = llm.prompt("Test message")
+
+            assert response == "Hello"
+            assert llm.extended_thinking is None
+            assert call_count == 2
+
     # ========== Streaming Final Response After Tools Tests ==========
 
     def test_stream_final_response_with_tools(self):

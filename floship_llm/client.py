@@ -182,6 +182,15 @@ class CloudFrontWAFSanitizer:
             (r"import\s+os", "import_os"),
             (r"os\.system", "os_system"),
         ],
+        "django_html": [
+            # Django format_html calls that trigger WAF
+            (r"format_html\(", "format_html_func("),
+            # HTML entity references in strings that trigger XSS
+            (r"&quot;", "[QUOT]"),
+            (r"&lt;", "[LT]"),
+            (r"&gt;", "[GT]"),
+            (r"&amp;", "[AMP]"),
+        ],
         "template_injection": [
             # Double curly braces at end of JSON (tool call arguments)
             # Pattern: }"}} or similar at end of tool calls
@@ -207,6 +216,13 @@ class CloudFrontWAFSanitizer:
             (r"onload\s*=", "on_load="),
             # 'response =' triggers 'onse =' XSS detection
             (r"response\s*=", "resp_var ="),
+            # HTML tags in strings that trigger XSS
+            (r"<span\s+style=", "[SPAN_STYLE]"),
+            (r"</span>", "[/SPAN]"),
+            (r"<a\s+href=", "[A_HREF]"),
+            (r"</a>", "[/A]"),
+            (r"<H[1-6]>", "[HEADING]"),
+            (r"</H[1-6]>", "[/HEADING]"),
         ],
         "url_templates": [
             # GitHub API URL templates like {/other_user}, {/gist_id}, etc.
@@ -249,6 +265,17 @@ class CloudFrontWAFSanitizer:
         "import_os": "import os",
         "os_system": "os.system",
         "resp_var =": "response =",
+        "format_html_func(": "format_html(",
+        "[QUOT]": "&quot;",
+        "[LT]": "&lt;",
+        "[GT]": "&gt;",
+        "[AMP]": "&amp;",
+        "[SPAN_STYLE]": "<span style=",
+        "[/SPAN]": "</span>",
+        "[A_HREF]": "<a href=",
+        "[/A]": "</a>",
+        "[HEADING]": "<H",
+        "[/HEADING]": "</H",
         # Restore Django/Jinja template tags
         "[DJANGO_TAG:": "{% ",  # handled via regex in desanitize
     }
@@ -582,6 +609,41 @@ class LLM:
 
         error_str = str(error).lower()
         return "403" in error_str or "forbidden" in error_str
+
+    def _should_disable_extended_thinking(self, error: Exception) -> bool:
+        """
+        Detect validation errors caused by extended thinking payload requirements.
+
+        Claude returns a 400 when `extended_thinking` is enabled but the message
+        history doesn't start with a required thinking block. In that case we
+        should retry without extended thinking to avoid hard failures.
+        """
+        if not self.extended_thinking:
+            return False
+
+        status_code = getattr(error, "status_code", None) or getattr(
+            error, "status", None
+        )
+        error_str = str(error).lower()
+
+        # Look for explicit validation hints
+        if (
+            status_code == 400
+            or "validation" in error_str
+            or "invalid_request" in error_str
+        ):
+            triggers = [
+                "expected `thinking`",
+                "expected 'thinking'",
+                "expected thinking",
+                "redacted_thinking",
+                "when `thinking` is enabled",
+                "when thinking is enabled",
+                "thinking block",
+            ]
+            return any(trigger in error_str for trigger in triggers)
+
+        return False
 
     def _log_waf_blocked_content(
         self, messages: List[Dict], context: str = ""
@@ -1105,6 +1167,8 @@ class LLM:
         # Truncation retry settings (for structured output with insufficient tokens)
         max_truncation_retries = 2
         current_max_tokens = self.max_completion_tokens
+        extended_thinking_disabled_for_retry = False
+        original_extended_thinking = self.extended_thinking
 
         for truncation_attempt in range(max_truncation_retries + 1):
             # Retry loop for CloudFront WAF 403 errors
@@ -1230,6 +1294,18 @@ class LLM:
                 except Exception as e:
                     last_error = e
 
+                    # Claude extended thinking validation failures (400) should retry without extended thinking
+                    if (
+                        not extended_thinking_disabled_for_retry
+                        and self._should_disable_extended_thinking(e)
+                    ):
+                        extended_thinking_disabled_for_retry = True
+                        self.extended_thinking = None
+                        logger.warning(
+                            "Extended thinking was rejected by the API; retrying without extended_thinking."
+                        )
+                        continue
+
                     # Check if it's a CloudFront 403 error
                     if (
                         self._is_cloudfront_403(e)
@@ -1303,12 +1379,16 @@ class LLM:
                 # WAF loop completed without break - either success (returned) or continue
                 # If we get here without returning, we exhausted WAF retries
                 if last_error:
+                    # Restore original extended_thinking setting before raising
+                    self.extended_thinking = original_extended_thinking
                     raise last_error
                 # If no error and didn't return, something is off - break to outer loop
                 break
 
         # This should never be reached, but just in case
         if last_error:
+            # Restore original extended_thinking setting before raising
+            self.extended_thinking = original_extended_thinking
             raise last_error
 
     def prompt_stream(self, prompt: str, system: Optional[str] = None):
@@ -1369,6 +1449,8 @@ class LLM:
 
         # Retry loop for CloudFront WAF 403 errors
         last_error = None
+        extended_thinking_disabled_for_retry = False
+        original_extended_thinking = self.extended_thinking
         for waf_attempt in range(self.waf_config.max_waf_retries + 1):
             try:
                 if self.waf_config.debug_mode:
@@ -1414,6 +1496,18 @@ class LLM:
 
             except Exception as e:
                 last_error = e
+
+                # Claude extended thinking validation failures (400) should retry without extended thinking
+                if (
+                    not extended_thinking_disabled_for_retry
+                    and self._should_disable_extended_thinking(e)
+                ):
+                    extended_thinking_disabled_for_retry = True
+                    self.extended_thinking = None
+                    logger.warning(
+                        "Extended thinking was rejected by the API; retrying without extended_thinking (streaming)."
+                    )
+                    continue
 
                 # Check if it's a CloudFront 403 error
                 if (
@@ -1465,6 +1559,9 @@ class LLM:
                         )
                         self.waf_metrics.failed_requests += 1
 
+                        # Restore original extended_thinking setting before raising
+                        self.extended_thinking = original_extended_thinking
+
                         # Raise CloudFrontWAFError with full context for Sentry
                         raise CloudFrontWAFError(
                             message=f"CloudFront WAF blocked streaming request after {self.waf_config.max_waf_retries + 1} attempts",
@@ -1481,6 +1578,8 @@ class LLM:
                             f"Streaming error: {type(e).__name__}: {str(e)[:200]}"
                         )
 
+                    # Restore original extended_thinking setting before raising
+                    self.extended_thinking = original_extended_thinking
                     raise
 
         if not self.continuous:
@@ -1488,6 +1587,8 @@ class LLM:
 
         # If we exited loop with error, raise it
         if last_error and waf_attempt >= self.waf_config.max_waf_retries:
+            # Restore original extended_thinking setting before raising
+            self.extended_thinking = original_extended_thinking
             raise last_error
 
     # Alias for prompt() - more intuitive for chat-based interactions

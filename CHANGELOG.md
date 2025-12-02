@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.22] - 2025-12-02
+
+### Fixed
+- **CloudFront WAF Coverage:** Enhanced sanitization to handle Django `format_html()` calls, HTML entities (`&quot;`, `&lt;`, `&gt;`, `&amp;`), and HTML tags in code (`<span>`, `<a>`, `<H1-6>`) that were triggering CloudFront WAF blocks in PR descriptions and code examples.
+- **Extended Thinking Error Detection:** Improved detection of Claude Extended Thinking validation errors to catch more error message variations (`expected thinking`, `redacted_thinking`).
+- **Extended Thinking State Restoration:** Fixed bug where `extended_thinking` setting wasn't restored to its original value after retry failures, ensuring the LLM instance remains in a consistent state.
+
 ## [0.5.21] - 2025-12-01
 
 ### Fixed
