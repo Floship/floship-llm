@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.28] - 2025-12-03
+
+### Fixed
+- **Tool Call Message Format:** Changed assistant messages with `tool_calls` to use `content=""` (empty string) instead of `content=None`. The API returns 400 error "content is required" when content is None.
+
 ## [0.5.27] - 2025-12-03
 
 ### Fixed

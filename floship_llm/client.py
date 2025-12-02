@@ -2511,17 +2511,17 @@ class LLM:
                 continue
 
             # Check if this is an assistant message with tool_calls
-            # IMPORTANT: For these messages, content MUST be None (not empty string, not space)
-            # Heroku/Claude APIs reject messages with both content AND tool_calls
+            # For these messages, content should be empty string (not None, not text content)
+            # The API requires content field but it should be empty for tool_call messages
             has_tool_calls = "tool_calls" in validated_msg and validated_msg.get(
                 "tool_calls"
             )
             is_assistant = validated_msg.get("role", "").lower() == "assistant"
             is_tool_call_message = is_assistant and has_tool_calls
 
-            # For tool_call messages, set content to None and skip all content processing
+            # For tool_call messages, set content to empty string and skip content processing
             if is_tool_call_message:
-                validated_msg["content"] = None
+                validated_msg["content"] = ""
                 # Sanitize tool call names and arguments
                 tool_calls = validated_msg.get("tool_calls")
                 if isinstance(tool_calls, list):
