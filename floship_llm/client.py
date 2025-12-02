@@ -2511,17 +2511,23 @@ class LLM:
                 continue
 
             # Check if this is an assistant message with tool_calls
-            # For these messages, content should be empty string (not None, not text content)
-            # The API requires content field but it should be empty for tool_call messages
+            # For these messages, preserve any existing content (LLM response before tool call)
+            # If no content exists, use empty string (API requires content field)
             has_tool_calls = "tool_calls" in validated_msg and validated_msg.get(
                 "tool_calls"
             )
             is_assistant = validated_msg.get("role", "").lower() == "assistant"
             is_tool_call_message = is_assistant and has_tool_calls
 
-            # For tool_call messages, set content to empty string and skip content processing
+            # For tool_call messages, preserve content if exists, otherwise empty string
             if is_tool_call_message:
-                validated_msg["content"] = ""
+                existing_content = validated_msg.get("content")
+                if existing_content and str(existing_content).strip():
+                    # Preserve the LLM's response text (e.g., "I'll help you with that")
+                    validated_msg["content"] = str(existing_content)
+                else:
+                    # No content - use empty string (API requires content field)
+                    validated_msg["content"] = ""
                 # Sanitize tool call names and arguments
                 tool_calls = validated_msg.get("tool_calls")
                 if isinstance(tool_calls, list):

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.29] - 2025-12-03
+
+### Changed
+- **Tool Call Message Content:** Now preserves the LLM's response text in assistant messages with tool_calls (e.g., "I'll help you with that") instead of always using empty string. Falls back to empty string only if no content exists.
+
 ## [0.5.28] - 2025-12-03
 
 ### Fixed
