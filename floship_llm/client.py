@@ -2159,6 +2159,25 @@ class LLM:
         params = self.get_request_params()
         validated_messages = self._validate_messages_for_api(self.messages)
 
+        # Log the messages being sent for debugging 500 errors
+        logger.info(
+            f"📤 FOLLOW-UP REQUEST after tool execution:\n"
+            f"   Total messages: {len(validated_messages)}"
+        )
+        for idx, msg in enumerate(validated_messages[-5:]):  # Last 5 messages
+            msg_role = msg.get("role", "unknown")
+            msg_content = msg.get("content")  # Keep as-is to see None
+            has_tc = "tool_calls" in msg
+            tc_id = msg.get("tool_call_id", "")
+            content_display = (
+                "None" if msg_content is None else repr(str(msg_content)[:100])
+            )
+            logger.info(
+                f"   MSG[{idx}] role={msg_role}, has_tool_calls={has_tc}, "
+                f"tool_call_id={tc_id[:20] if tc_id else 'N/A'}, "
+                f"content={content_display}"
+            )
+
         # Check if we should stream the final response
         if stream_final_response:
             # Enable streaming for the follow-up request
@@ -2491,7 +2510,28 @@ class LLM:
                 logger.warning(f"Skipping message at index {i} with empty role")
                 continue
 
-            # Validate content
+            # Check if this is an assistant message with tool_calls
+            # IMPORTANT: For these messages, content MUST be None (not empty string, not space)
+            # Heroku/Claude APIs reject messages with both content AND tool_calls
+            has_tool_calls = "tool_calls" in validated_msg and validated_msg.get(
+                "tool_calls"
+            )
+            is_assistant = validated_msg.get("role", "").lower() == "assistant"
+            is_tool_call_message = is_assistant and has_tool_calls
+
+            # For tool_call messages, set content to None and skip all content processing
+            if is_tool_call_message:
+                validated_msg["content"] = None
+                # Sanitize tool call names and arguments
+                tool_calls = validated_msg.get("tool_calls")
+                if isinstance(tool_calls, list):
+                    validated_msg["tool_calls"] = self._sanitize_tool_calls(
+                        tool_calls, i
+                    )
+                validated_messages.append(validated_msg)
+                continue
+
+            # For all other messages, validate content normally
             if "content" not in validated_msg:
                 validated_msg["content"] = "Message content unavailable"
             elif validated_msg["content"] is None:
@@ -2513,8 +2553,6 @@ class LLM:
             if not content:
                 if role == "tool":
                     validated_msg["content"] = "Tool executed successfully"
-                elif role == "assistant" and "tool_calls" in validated_msg:
-                    validated_msg["content"] = " "
                 else:
                     validated_msg["content"] = "Content unavailable"
             # Fix tool content if it's a placeholder
@@ -2534,13 +2572,9 @@ class LLM:
                         f"WAF sanitized message {i} ({role}): content modified"
                     )
 
-            # Ensure no empty content
+            # Ensure no empty content for non-tool-call messages
             if validated_msg["content"] == "":
-                validated_msg["content"] = (
-                    " "
-                    if (role == "assistant" and "tool_calls" in validated_msg)
-                    else "."
-                )
+                validated_msg["content"] = "."
 
             # Sanitize tool call names and arguments to comply with API and WAF
             if "tool_calls" in validated_msg:

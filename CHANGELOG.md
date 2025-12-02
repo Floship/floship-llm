@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.27] - 2025-12-03
+
+### Fixed
+- **Tool Call Message Format:** Fixed critical bug where assistant messages with `tool_calls` were having their content set to `"Message content unavailable"` or `" "` instead of `None`. Heroku/Claude APIs require `content=None` for assistant messages that contain tool_calls. This was causing 500 errors on follow-up API calls after tool execution.
+
+### Added
+- **Follow-up Request Logging:** Added detailed logging of messages being sent in follow-up requests after tool execution, showing role, tool_calls presence, tool_call_id, and content for debugging.
+
 ## [0.5.22] - 2025-12-02
 
 ### Fixed
