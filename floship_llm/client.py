@@ -716,6 +716,153 @@ class LLM:
 
         return all_blockers
 
+    def _log_tool_call_context(
+        self,
+        context: str,
+        params: Dict[str, Any],
+        messages: List[Dict],
+        error: Optional[Exception] = None,
+    ) -> None:
+        """
+        Log detailed tool call context for debugging API errors.
+
+        This method provides comprehensive logging of the request state when
+        tool calls fail, helping diagnose 500 errors and other issues.
+
+        Args:
+            context: Description of where the error occurred
+            params: Request parameters
+            messages: Conversation messages
+            error: Optional exception that triggered the log
+        """
+        log_lines = [
+            f"\n{'=' * 60}",
+            f"TOOL CALL DEBUG CONTEXT: {context}",
+            f"{'=' * 60}",
+        ]
+
+        # Log error details if present
+        if error:
+            log_lines.append(f"ERROR TYPE: {type(error).__name__}")
+            log_lines.append(f"ERROR MESSAGE: {str(error)[:500]}")
+            if hasattr(error, "status_code"):
+                log_lines.append(f"STATUS CODE: {error.status_code}")
+            if hasattr(error, "response"):
+                try:
+                    resp_text = str(error.response)[:1000]
+                    log_lines.append(f"RESPONSE: {resp_text}")
+                except Exception:
+                    pass
+
+        # Log request parameters (without messages)
+        params_copy = {k: v for k, v in params.items() if k != "messages"}
+        log_lines.append(f"\nREQUEST PARAMS: {json.dumps(params_copy, default=str)}")
+
+        # Log message summary
+        log_lines.append(f"\nMESSAGE COUNT: {len(messages)}")
+
+        # Count by role
+        role_counts = {}
+        for msg in messages:
+            role = msg.get("role", "unknown")
+            role_counts[role] = role_counts.get(role, 0) + 1
+        log_lines.append(f"MESSAGES BY ROLE: {role_counts}")
+
+        # Log last 10 messages with details
+        log_lines.append("\nLAST 10 MESSAGES:")
+        for i, msg in enumerate(messages[-10:]):
+            role = msg.get("role", "unknown")
+            content = msg.get("content", "")
+            content_len = len(str(content)) if content else 0
+
+            # Truncate content preview
+            if content and len(str(content)) > 200:
+                content_preview = str(content)[:200] + "..."
+            else:
+                content_preview = str(content)[:200] if content else "(empty)"
+
+            msg_line = f"  [{len(messages) - 10 + i}] {role}: len={content_len}"
+
+            # Add tool call info if present
+            if "tool_calls" in msg:
+                tool_calls = msg.get("tool_calls", [])
+                tool_names = [
+                    tc.get("function", {}).get("name", "?") for tc in tool_calls[:5]
+                ]
+                msg_line += f" | tool_calls={tool_names}"
+
+            # Add tool_call_id if present (for tool response messages)
+            if "tool_call_id" in msg:
+                msg_line += f" | tool_call_id={msg.get('tool_call_id')}"
+
+            log_lines.append(msg_line)
+            log_lines.append(f"      Content: {content_preview}")
+
+        # Log tool messages in detail (these often cause 500 errors)
+        tool_messages = [m for m in messages if m.get("role") == "tool"]
+        if tool_messages:
+            log_lines.append(f"\nTOOL RESPONSE MESSAGES ({len(tool_messages)} total):")
+            for i, msg in enumerate(tool_messages[-5:]):  # Last 5 tool messages
+                content = msg.get("content", "")
+                content_len = len(str(content)) if content else 0
+                tool_call_id = msg.get("tool_call_id", "unknown")
+
+                log_lines.append(
+                    f"  Tool response {i}: id={tool_call_id}, len={content_len}"
+                )
+
+                # Check for problematic content patterns
+                if content:
+                    content_str = str(content)
+                    # Check for very long content
+                    if content_len > 10000:
+                        log_lines.append(
+                            f"    WARNING: Very long content ({content_len} chars)"
+                        )
+                    # Check for potential encoding issues
+                    if "\\u" in content_str or "\\x" in content_str:
+                        log_lines.append("    WARNING: Contains escape sequences")
+                    # Check for nested JSON
+                    if content_str.count("{") > 10:
+                        log_lines.append(
+                            f"    WARNING: Deeply nested JSON ({content_str.count('{')} braces)"
+                        )
+
+                    # Preview first and last parts
+                    if content_len > 500:
+                        log_lines.append(f"    Start: {content_str[:250]}...")
+                        log_lines.append(f"    End: ...{content_str[-250:]}")
+                    else:
+                        log_lines.append(f"    Content: {content_str}")
+
+        # Log current tool tracking state
+        log_lines.append("\nTOOL TRACKING STATE:")
+        log_lines.append(f"  Current tool call count: {self._current_tool_call_count}")
+        log_lines.append(f"  Current recursion depth: {self._current_recursion_depth}")
+        log_lines.append(f"  Tool history entries: {len(self._current_tool_history)}")
+
+        # Log recent tool history
+        if self._current_tool_history:
+            log_lines.append("\nRECENT TOOL HISTORY (last 5):")
+            for entry in self._current_tool_history[-5:]:
+                log_lines.append(
+                    f"  #{entry.get('index', '?')} {entry.get('tool', '?')} "
+                    f"(depth={entry.get('recursion_depth', '?')}, "
+                    f"time={entry.get('execution_time_ms', '?')}ms, "
+                    f"result_len={entry.get('result_length', '?')})"
+                )
+                if "error" in entry:
+                    log_lines.append(f"      ERROR: {entry['error']}")
+
+        log_lines.append(f"{'=' * 60}\n")
+
+        # Log as error if there's an error, otherwise as debug
+        log_message = "\n".join(log_lines)
+        if error:
+            logger.error(log_message)
+        else:
+            logger.debug(log_message)
+
     def get_waf_metrics(self) -> dict:
         """Get current CloudFront WAF metrics."""
         return self.waf_metrics.to_dict()
@@ -2032,10 +2179,18 @@ class LLM:
                             **params,
                             messages=validated_messages,
                         )
-                    except InternalServerError:
-                        logger.warning(
-                            "Internal Server Error detected after tool execution (recursive). "
-                            "Attempting to recover by simplifying tool outputs."
+                    except InternalServerError as stream_500_error:
+                        logger.error(
+                            "Internal Server Error (500) detected after tool execution (recursive/streaming). "
+                            "Logging full context before attempting recovery."
+                        )
+
+                        # Log detailed context for debugging
+                        self._log_tool_call_context(
+                            context="500 Error after tool execution (streaming)",
+                            params=params,
+                            messages=self.messages,
+                            error=stream_500_error,
                         )
 
                         # Check if we have tool messages to simplify
@@ -2043,7 +2198,20 @@ class LLM:
                         for i in range(len(self.messages) - 1, -1, -1):
                             msg = self.messages[i]
                             if msg.get("role") == "tool":
-                                original_len = len(str(msg.get("content", "")))
+                                original_content = str(msg.get("content", ""))
+                                original_len = len(original_content)
+                                tool_call_id = msg.get("tool_call_id", "unknown")
+
+                                # Log the FULL original content before truncating
+                                logger.error(
+                                    f"Tool message {i} (id={tool_call_id}) ORIGINAL CONTENT "
+                                    f"({original_len} chars):\n"
+                                    f"{'=' * 60}\n"
+                                    f"{original_content[:5000]}"
+                                    f"{'...[TRUNCATED]' if original_len > 5000 else ''}\n"
+                                    f"{'=' * 60}"
+                                )
+
                                 msg["content"] = (
                                     "Tool execution succeeded, but output was truncated due to server error. "
                                     "Please proceed based on the fact that the tool ran successfully."
@@ -2138,20 +2306,52 @@ class LLM:
             except APIStatusError as e:
                 # Handle 500 Internal Server Error
                 if e.status_code == 500:
-                    logger.warning(
-                        "Internal Server Error detected after tool execution. "
-                        "Attempting to recover by simplifying tool outputs."
+                    logger.error(
+                        "Internal Server Error (500) detected after tool execution. "
+                        "Logging full context before attempting recovery."
+                    )
+
+                    # Log detailed context for debugging
+                    self._log_tool_call_context(
+                        context="500 Error after tool execution",
+                        params=params,
+                        messages=self.messages,
+                        error=e,
                     )
 
                     # Check if we have tool messages to simplify
                     modified = False
+                    original_tool_contents = []  # Store originals for logging
                     # Only look at the most recent messages (likely the tool outputs causing the issue)
                     # We iterate backwards until we find a non-tool message
                     for i in range(len(self.messages) - 1, -1, -1):
                         msg = self.messages[i]
                         if msg.get("role") == "tool":
+                            # Store original content for debugging
+                            original_content = str(msg.get("content", ""))
+                            original_len = len(original_content)
+                            tool_call_id = msg.get("tool_call_id", "unknown")
+
+                            # Log the FULL original content before truncating
+                            logger.error(
+                                f"Tool message {i} (id={tool_call_id}) ORIGINAL CONTENT "
+                                f"({original_len} chars):\n"
+                                f"{'=' * 60}\n"
+                                f"{original_content[:5000]}"
+                                f"{'...[TRUNCATED]' if original_len > 5000 else ''}\n"
+                                f"{'=' * 60}"
+                            )
+
+                            original_tool_contents.append(
+                                {
+                                    "index": i,
+                                    "tool_call_id": tool_call_id,
+                                    "original_len": original_len,
+                                    "content_preview": original_content[:1000],
+                                }
+                            )
+
                             # Replace content with a simplified message
-                            original_len = len(str(msg.get("content", "")))
                             msg["content"] = (
                                 "Tool execution succeeded, but output was truncated due to server error. "
                                 "Please proceed based on the fact that the tool ran successfully."
