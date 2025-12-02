@@ -2007,23 +2007,23 @@ class LLM:
             ],
         }
 
-        # Handle content - for tool calls, we should NOT include content
-        # as some APIs (including Heroku/Claude) may reject messages with both
-        # content and tool_calls in the assistant message
+        # Handle content - preserve LLM's response text if it exists
+        # Some models say "I'll help you with that" before calling tools
         try:
             raw_content = message.content if hasattr(message, "content") else None
         except Exception:
             raw_content = None
 
-        # When there are tool_calls, don't include content to avoid API errors
-        # The content will be logged but not sent to the API
+        # Preserve content if exists, otherwise use empty string (API requires content field)
         if raw_content and str(raw_content).strip():
+            assistant_message["content"] = str(raw_content)
             logger.debug(
-                f"Assistant message has both content and tool_calls. "
-                f"Content ({len(str(raw_content))} chars) will be omitted from API request."
+                f"Assistant message has content with tool_calls: "
+                f"{len(str(raw_content))} chars"
             )
-        # Set content to None for tool call messages (required by some APIs)
-        assistant_message["content"] = None
+        else:
+            # No content - use empty string (API requires content field, not None)
+            assistant_message["content"] = ""
 
         self.messages.append(assistant_message)
 

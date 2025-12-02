@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.30] - 2025-12-03
+
+### Fixed
+- **Tool Call Message Content:** Fixed the root cause - `_handle_tool_calls` was setting `content=None` before appending to messages, which overrode any existing LLM response. Now preserves content if exists, uses empty string otherwise.
+
 ## [0.5.29] - 2025-12-03
 
 ### Changed
