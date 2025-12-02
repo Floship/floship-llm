@@ -751,7 +751,7 @@ class LLM:
                 try:
                     resp_text = str(error.response)[:1000]
                     log_lines.append(f"RESPONSE: {resp_text}")
-                except Exception:
+                except Exception:  # nosec B110 - intentionally ignoring to prevent logging failures
                     pass
 
         # Log request parameters (without messages)
@@ -854,7 +854,7 @@ class LLM:
                 if "error" in entry:
                     log_lines.append(f"      ERROR: {entry['error']}")
 
-        log_lines.append(f"{'=' * 60}\n")
+        log_lines.append("=" * 60 + "\n")
 
         # Log as error if there's an error, otherwise as debug
         log_message = "\n".join(log_lines)
