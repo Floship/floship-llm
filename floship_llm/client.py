@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
@@ -859,6 +860,8 @@ class LLM:
         # Log as error if there's an error, otherwise as debug
         log_message = "\n".join(log_lines)
         if error:
+            # Also print to stderr for immediate visibility in Heroku
+            print(log_message, file=sys.stderr, flush=True)
             logger.error(log_message)
         else:
             logger.debug(log_message)
@@ -2306,6 +2309,13 @@ class LLM:
             except APIStatusError as e:
                 # Handle 500 Internal Server Error
                 if e.status_code == 500:
+                    # Use print to stderr to ensure immediate output in Heroku
+                    print(
+                        "\n" + "=" * 80 + "\n"
+                        "[FLOSHIP-LLM] 500 ERROR AFTER TOOL EXECUTION\n" + "=" * 80,
+                        file=sys.stderr,
+                        flush=True,
+                    )
                     logger.error(
                         "Internal Server Error (500) detected after tool execution. "
                         "Logging full context before attempting recovery."
@@ -2333,7 +2343,7 @@ class LLM:
                             tool_call_id = msg.get("tool_call_id", "unknown")
 
                             # Log the FULL original content before truncating
-                            logger.error(
+                            tool_content_log = (
                                 f"Tool message {i} (id={tool_call_id}) ORIGINAL CONTENT "
                                 f"({original_len} chars):\n"
                                 f"{'=' * 60}\n"
@@ -2341,6 +2351,8 @@ class LLM:
                                 f"{'...[TRUNCATED]' if original_len > 5000 else ''}\n"
                                 f"{'=' * 60}"
                             )
+                            print(tool_content_log, file=sys.stderr, flush=True)
+                            logger.error(tool_content_log)
 
                             original_tool_contents.append(
                                 {
