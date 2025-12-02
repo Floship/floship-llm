@@ -792,6 +792,15 @@ class LLM:
                 ]
                 msg_line += f" | tool_calls={tool_names}"
 
+                # Log the actual tool call arguments (this is what we need to debug!)
+                for tc in tool_calls[:3]:  # First 3 tool calls
+                    tc_name = tc.get("function", {}).get("name", "?")
+                    tc_args = tc.get("function", {}).get("arguments", "{}")
+                    log_lines.append(f"      TOOL CALL: {tc_name}")
+                    log_lines.append(
+                        f"      ARGUMENTS: {tc_args[:2000]}{'...[TRUNCATED]' if len(tc_args) > 2000 else ''}"
+                    )
+
             # Add tool_call_id if present (for tool response messages)
             if "tool_call_id" in msg:
                 msg_line += f" | tool_call_id={msg.get('tool_call_id')}"
@@ -1998,16 +2007,23 @@ class LLM:
             ],
         }
 
-        # Handle content
+        # Handle content - for tool calls, we should NOT include content
+        # as some APIs (including Heroku/Claude) may reject messages with both
+        # content and tool_calls in the assistant message
         try:
             raw_content = message.content if hasattr(message, "content") else None
         except Exception:
             raw_content = None
 
+        # When there are tool_calls, don't include content to avoid API errors
+        # The content will be logged but not sent to the API
         if raw_content and str(raw_content).strip():
-            assistant_message["content"] = str(raw_content).strip()
-        else:
-            assistant_message["content"] = "[Tool calls in progress]"
+            logger.debug(
+                f"Assistant message has both content and tool_calls. "
+                f"Content ({len(str(raw_content))} chars) will be omitted from API request."
+            )
+        # Set content to None for tool call messages (required by some APIs)
+        assistant_message["content"] = None
 
         self.messages.append(assistant_message)
 
