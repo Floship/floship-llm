@@ -2038,6 +2038,14 @@ class LLM:
             try:
                 # Parse and execute
                 arguments = json.loads(tool_call.function.arguments)
+
+                # Log tool call arguments for debugging
+                args_str = json.dumps(arguments, default=str)
+                logger.info(
+                    f"🔧 TOOL CALL: {tool_call.function.name}\n"
+                    f"   ARGUMENTS: {args_str[:3000]}{'...[TRUNCATED]' if len(args_str) > 3000 else ''}"
+                )
+
                 tc = ToolCall(
                     id=tool_call.id, name=tool_call.function.name, arguments=arguments
                 )
