@@ -41,7 +41,7 @@ class ToolManager:
             )
 
         if tool.name in self.tools:
-            raise ValueError(f"Tool '{tool.name}' already exists")
+            return
 
         self.tools[tool.name] = tool
         logger.debug(f"Tool '{tool.name}' registered")
