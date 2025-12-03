@@ -717,6 +717,38 @@ class LLM:
 
         return all_blockers
 
+    def _build_tool_free_messages(self, note: str) -> List[Dict[str, Any]]:
+        """
+        Create a copy of conversation messages with tool content stripped.
+
+        This is used when repeated 500 errors occur after tool execution, to
+        retry without tool messages or tool_calls that might be triggering the
+        server error.
+        """
+        cleaned_messages: List[Dict[str, Any]] = []
+
+        for msg in self.messages:
+            if not isinstance(msg, dict):
+                continue
+
+            # Skip tool role messages entirely
+            if msg.get("role") == "tool":
+                continue
+
+            cleaned = dict(msg)
+
+            # Remove tool_calls and append a note so the model knows tools ran
+            if cleaned.get("role") == "assistant" and cleaned.get("tool_calls"):
+                cleaned.pop("tool_calls", None)
+                existing_content = str(cleaned.get("content") or "").strip()
+                cleaned["content"] = (
+                    f"{existing_content}\n\n{note}" if existing_content else note
+                )
+
+            cleaned_messages.append(cleaned)
+
+        return cleaned_messages
+
     def _log_tool_call_context(
         self,
         context: str,
@@ -2432,6 +2464,51 @@ class LLM:
                                 **params,
                                 messages=validated_messages,
                             )
+                        except APIStatusError as retry_error:
+                            # If truncation still triggers 500, try once more without tool messages/tools
+                            if retry_error.status_code == 500:
+                                logger.error(
+                                    "Second 500 after truncating tool messages; "
+                                    "retrying without tool messages or tool_calls."
+                                )
+                                fallback_note = (
+                                    "Tool execution succeeded but the raw output was "
+                                    "removed due to repeated server errors. "
+                                    "Please continue without the tool output."
+                                )
+                                fallback_messages = self._build_tool_free_messages(
+                                    fallback_note
+                                )
+                                fallback_params = dict(params)
+                                fallback_params.pop("tools", None)
+                                fallback_params.pop("tool_choice", None)
+
+                                # Log fallback context for debugging
+                                self._log_tool_call_context(
+                                    context="500 retry without tool messages",
+                                    params=fallback_params,
+                                    messages=fallback_messages,
+                                    error=retry_error,
+                                )
+
+                                try:
+                                    follow_up_response = (
+                                        self.retry_handler.execute_with_retry(
+                                            self.client.chat.completions.create,
+                                            **fallback_params,
+                                            messages=self._validate_messages_for_api(
+                                                fallback_messages
+                                            ),
+                                        )
+                                    )
+                                except Exception as final_error:
+                                    logger.error(
+                                        f"Final recovery attempt failed: {final_error}"
+                                    )
+                                    raise e
+                            else:
+                                logger.error(f"Recovery attempt failed: {retry_error}")
+                                raise e
                         except Exception as retry_error:
                             logger.error(f"Recovery attempt failed: {retry_error}")
                             raise e  # Raise original 500 error if recovery fails
