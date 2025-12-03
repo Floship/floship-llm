@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.31] - 2025-12-03
+
+### Fixed
+- **Tool Call Message Content:** Changed from empty string `""` to single space `" "` for assistant messages with tool_calls when no content exists. The API rejects both `None` AND empty string with "content is required" error.
+
 ## [0.5.30] - 2025-12-03
 
 ### Fixed

@@ -2022,8 +2022,8 @@ class LLM:
                 f"{len(str(raw_content))} chars"
             )
         else:
-            # No content - use empty string (API requires content field, not None)
-            assistant_message["content"] = ""
+            # No content - use single space (API requires non-empty content field)
+            assistant_message["content"] = " "
 
         self.messages.append(assistant_message)
 
@@ -2512,22 +2512,22 @@ class LLM:
 
             # Check if this is an assistant message with tool_calls
             # For these messages, preserve any existing content (LLM response before tool call)
-            # If no content exists, use empty string (API requires content field)
+            # If no content exists, use single space (API requires non-empty content field)
             has_tool_calls = "tool_calls" in validated_msg and validated_msg.get(
                 "tool_calls"
             )
             is_assistant = validated_msg.get("role", "").lower() == "assistant"
             is_tool_call_message = is_assistant and has_tool_calls
 
-            # For tool_call messages, preserve content if exists, otherwise empty string
+            # For tool_call messages, preserve content if exists, otherwise single space
             if is_tool_call_message:
                 existing_content = validated_msg.get("content")
                 if existing_content and str(existing_content).strip():
                     # Preserve the LLM's response text (e.g., "I'll help you with that")
                     validated_msg["content"] = str(existing_content)
                 else:
-                    # No content - use empty string (API requires content field)
-                    validated_msg["content"] = ""
+                    # No content - use single space (API requires non-empty content)
+                    validated_msg["content"] = " "
                 # Sanitize tool call names and arguments
                 tool_calls = validated_msg.get("tool_calls")
                 if isinstance(tool_calls, list):
