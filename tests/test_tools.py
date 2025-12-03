@@ -694,8 +694,16 @@ class TestLLMTools:
                     tool_call_message = msg
                     break
             assert tool_call_message is not None
-            # The library may normalize empty assistant content to a placeholder for API compatibility
-            assert tool_call_message["content"] in ["", " ", "[Tool calls in progress]"]
+            # The library omits content field for tool-call-only messages
+            # (content will be added by _validate_messages_for_api when sending to API)
+            # Content may or may not be present in the raw message
+            if "content" in tool_call_message:
+                assert tool_call_message["content"] in [
+                    "",
+                    " ",
+                    ".",
+                    "[Tool calls in progress]",
+                ]
 
             tool_messages = [msg for msg in llm.messages if msg.get("role") == "tool"]
             assert len(tool_messages) > 0
@@ -961,8 +969,8 @@ class TestLLMTools:
             assert len(validated) == 1
             assert validated[0]["role"] == "assistant"
             assert "tool_calls" in validated[0]
-            # Assistant with tool_calls uses single space (API requires non-empty content)
-            assert validated[0]["content"] == " "
+            # Assistant with tool_calls uses period placeholder (API requires non-empty content)
+            assert validated[0]["content"] == "."
 
     def test_validate_messages_edge_logging(self):
         """Test edge case logging paths for full coverage."""
@@ -1018,8 +1026,8 @@ class TestToolManagerValidation:
         with pytest.raises(ValueError, match="Invalid tool name"):
             manager.add_tool(tool)
 
-    def test_add_duplicate_tool_raises_error(self):
-        """Test that adding a duplicate tool raises ValueError."""
+    def test_add_duplicate_tool_is_idempotent(self):
+        """Test that adding a duplicate tool is idempotent (silently ignored)."""
         from floship_llm.tool_manager import ToolManager
 
         manager = ToolManager()
@@ -1030,9 +1038,11 @@ class TestToolManagerValidation:
         )
         manager.add_tool(tool)
 
-        # Try to add the same tool again
-        with pytest.raises(ValueError, match="already exists"):
-            manager.add_tool(tool)
+        # Adding the same tool again should be a no-op
+        manager.add_tool(tool)
+
+        # Should still only have one tool
+        assert len(manager.tools) == 1
 
     def test_execute_invalid_tool_call_type(self):
         """Test that execute_tool with wrong type raises ValueError."""

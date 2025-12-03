@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.32] - 2025-12-03
+
+### Fixed
+- **Tool Call Message Content:** Changed from single space `" "` to period `"."` for assistant messages with tool_calls when no content exists. Period is more universally accepted by APIs.
+
+### Added
+- **Enhanced Error Logging:** Added detailed error response logging for 500 errors including response body, response text, and error body attributes to help diagnose Heroku API issues.
+
 ## [0.5.31] - 2025-12-03
 
 ### Fixed

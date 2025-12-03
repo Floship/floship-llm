@@ -784,7 +784,24 @@ class LLM:
                 try:
                     resp_text = str(error.response)[:1000]
                     log_lines.append(f"RESPONSE: {resp_text}")
+                    # Try to get more details from the response body
+                    if hasattr(error.response, "text"):
+                        log_lines.append(f"RESPONSE TEXT: {error.response.text[:2000]}")
+                    if hasattr(error.response, "json"):
+                        try:
+                            resp_json = error.response.json()
+                            log_lines.append(
+                                f"RESPONSE JSON: {json.dumps(resp_json, default=str)[:2000]}"
+                            )
+                        except Exception:  # nosec B110
+                            pass
                 except Exception:  # nosec B110 - intentionally ignoring to prevent logging failures
+                    pass
+            # Also log the body attribute if present (httpx/openai errors)
+            if hasattr(error, "body"):
+                try:
+                    log_lines.append(f"ERROR BODY: {str(error.body)[:2000]}")
+                except Exception:  # nosec B110
                     pass
 
         # Log request parameters (without messages)
@@ -2046,16 +2063,15 @@ class LLM:
         except Exception:
             raw_content = None
 
-        # Preserve content if exists, otherwise use empty string (API requires content field)
+        # Only include content if there's actual text from the LLM
+        # For tool-only responses, omit the content field entirely
         if raw_content and str(raw_content).strip():
             assistant_message["content"] = str(raw_content)
             logger.debug(
                 f"Assistant message has content with tool_calls: "
                 f"{len(str(raw_content))} chars"
             )
-        else:
-            # No content - use single space (API requires non-empty content field)
-            assistant_message["content"] = " "
+        # Note: For tool-call-only messages, we don't set content at all
 
         self.messages.append(assistant_message)
 
@@ -2258,9 +2274,19 @@ class LLM:
                             messages=validated_messages,
                         )
                     except InternalServerError as stream_500_error:
+                        # Get detailed error info
+                        error_details = f"Error: {str(stream_500_error)[:500]}"
+                        if hasattr(stream_500_error, "body"):
+                            error_details += (
+                                f"\nBody: {str(stream_500_error.body)[:1000]}"
+                            )
+                        if hasattr(stream_500_error, "response") and hasattr(
+                            stream_500_error.response, "text"
+                        ):
+                            error_details += f"\nResponse text: {stream_500_error.response.text[:1000]}"
                         logger.error(
                             "Internal Server Error (500) detected after tool execution (recursive/streaming). "
-                            "Logging full context before attempting recovery."
+                            f"Error details: {error_details}"
                         )
 
                         # Log detailed context for debugging
@@ -2385,15 +2411,21 @@ class LLM:
                 # Handle 500 Internal Server Error
                 if e.status_code == 500:
                     # Use print to stderr to ensure immediate output in Heroku
+                    error_details = f"Error: {str(e)[:500]}"
+                    if hasattr(e, "body"):
+                        error_details += f"\nBody: {str(e.body)[:1000]}"
+                    if hasattr(e, "response") and hasattr(e.response, "text"):
+                        error_details += f"\nResponse text: {e.response.text[:1000]}"
                     print(
                         "\n" + "=" * 80 + "\n"
-                        "[FLOSHIP-LLM] 500 ERROR AFTER TOOL EXECUTION\n" + "=" * 80,
+                        "[FLOSHIP-LLM] 500 ERROR AFTER TOOL EXECUTION\n"
+                        f"{error_details}\n" + "=" * 80,
                         file=sys.stderr,
                         flush=True,
                     )
                     logger.error(
                         "Internal Server Error (500) detected after tool execution. "
-                        "Logging full context before attempting recovery."
+                        f"Error details: {error_details}"
                     )
 
                     # Log detailed context for debugging
@@ -2596,15 +2628,16 @@ class LLM:
             is_assistant = validated_msg.get("role", "").lower() == "assistant"
             is_tool_call_message = is_assistant and has_tool_calls
 
-            # For tool_call messages, preserve content if exists, otherwise single space
+            # For tool_call messages, preserve content if exists, otherwise use placeholder
             if is_tool_call_message:
                 existing_content = validated_msg.get("content")
                 if existing_content and str(existing_content).strip():
                     # Preserve the LLM's response text (e.g., "I'll help you with that")
                     validated_msg["content"] = str(existing_content)
                 else:
-                    # No content - use single space (API requires non-empty content)
-                    validated_msg["content"] = " "
+                    # No content - use minimal placeholder (some APIs require non-empty content)
+                    # Using period as it's more universally accepted than space
+                    validated_msg["content"] = "."
                 # Sanitize tool call names and arguments
                 tool_calls = validated_msg.get("tool_calls")
                 if isinstance(tool_calls, list):
