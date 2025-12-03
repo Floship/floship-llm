@@ -170,22 +170,32 @@ class ToolManager:
         tool = self.get_tool(tool_call.name)
         if not tool:
             available_tools = list(self.tools.keys())
+            # Create a concise, LLM-friendly error message
+            # Keep it short to avoid confusing the API
             if available_tools:
+                # Limit to first 10 tools to avoid huge messages
+                tools_preview = available_tools[:10]
+                tools_str = ", ".join(tools_preview)
+                if len(available_tools) > 10:
+                    tools_str += f" (+{len(available_tools) - 10} more)"
                 error_msg = (
-                    f"Tool '{tool_call.name}' not found. "
-                    f"Available tools: {', '.join(available_tools)}"
+                    f"Error: Tool '{tool_call.name}' is not available. "
+                    f"Please use one of: {tools_str}"
                 )
             else:
                 error_msg = (
-                    f"Tool '{tool_call.name}' not found. No tools are registered."
+                    f"Error: Tool '{tool_call.name}' is not available. "
+                    "No tools are currently registered."
                 )
-            logger.error(error_msg)
+            logger.warning(
+                f"Tool not found: '{tool_call.name}'. Available: {available_tools}"
+            )
             return ToolResult(
                 tool_call_id=tool_call.id,
                 name=tool_call.name,
                 content=error_msg,
                 success=False,
-                error=error_msg,
+                error=f"Tool not found: {tool_call.name}",
             )
 
         if not tool.function:

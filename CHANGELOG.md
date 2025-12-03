@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.33] - 2025-12-03
+
+### Changed
+- **Tool Not Found Error Handling:** Improved error messages when LLM calls a non-existent tool. Now returns a cleaner, more concise message: "Error: Tool 'X' is not available. Please use one of: tool1, tool2, ..." (limited to first 10 tools). This prevents confusing error messages from being passed to the API which could trigger 500 errors.
+
 ## [0.5.32] - 2025-12-03
 
 ### Fixed

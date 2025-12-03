@@ -301,7 +301,7 @@ class TestLLMTools:
             result = llm.execute_tool(tool_call)
 
             assert result.success is False
-            assert "not found" in result.content.lower()
+            assert "not available" in result.content.lower()
             assert result.error is not None
 
     def test_execute_tool_not_found_shows_available_tools(self):
@@ -330,8 +330,8 @@ class TestLLMTools:
             result = llm.execute_tool(tool_call)
 
             assert result.success is False
-            assert "not found" in result.content.lower()
-            assert "available tools" in result.content.lower()
+            assert "not available" in result.content.lower()
+            assert "please use one of" in result.content.lower()
             assert "tool_one" in result.content
             assert "tool_two" in result.content
 
