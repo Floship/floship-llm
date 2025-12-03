@@ -2812,11 +2812,52 @@ class LLM:
             safe_name, _ = self._sanitize_tool_name_for_api(name)
             func["name"] = safe_name
 
-            # Sanitize arguments for WAF if enabled
-            if self.waf_config.enable_waf_sanitization:
-                args = func.get("arguments")
-                if args and isinstance(args, str):
-                    func["arguments"], _ = CloudFrontWAFSanitizer.sanitize(args)
+            # Validate and sanitize arguments to prevent 500 errors
+            # The API returns 500 "Failed to execute chat" for invalid JSON in arguments
+            args = func.get("arguments")
+            if args is not None:
+                if isinstance(args, str):
+                    # Validate it's valid JSON
+                    try:
+                        parsed = json.loads(args)
+                        # Ensure it's an object (not array, number, boolean, etc.)
+                        # Arrays and primitives cause 500 errors
+                        if not isinstance(parsed, dict) and parsed is not None:
+                            logger.warning(
+                                f"Tool call arguments at message {msg_index} index {tc_index} "
+                                f"is not a JSON object: {type(parsed).__name__}. Wrapping in object."
+                            )
+                            # Wrap non-object values in an object
+                            func["arguments"] = json.dumps({"value": parsed})
+                        else:
+                            # Re-serialize to ensure clean JSON (removes trailing commas, etc.)
+                            func["arguments"] = json.dumps(parsed)
+                    except json.JSONDecodeError as e:
+                        logger.warning(
+                            f"Invalid JSON in tool call arguments at message {msg_index} "
+                            f"index {tc_index}: {e}. Using empty object."
+                        )
+                        # Replace invalid JSON with empty object to prevent 500 error
+                        func["arguments"] = "{}"
+
+                    # Sanitize arguments for WAF if enabled
+                    if self.waf_config.enable_waf_sanitization:
+                        func["arguments"], _ = CloudFrontWAFSanitizer.sanitize(
+                            func["arguments"]
+                        )
+                elif isinstance(args, dict):
+                    # Already a dict, serialize it
+                    func["arguments"] = json.dumps(args)
+                else:
+                    # Unknown type, use empty object
+                    logger.warning(
+                        f"Unexpected arguments type at message {msg_index} index {tc_index}: "
+                        f"{type(args).__name__}. Using empty object."
+                    )
+                    func["arguments"] = "{}"
+            else:
+                # No arguments, use empty object
+                func["arguments"] = "{}"
 
             sanitized_tc["function"] = func
             sanitized_tool_calls.append(sanitized_tc)

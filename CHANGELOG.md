@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.35] - 2025-12-03
+
+### Fixed
+- **500 "Failed to execute chat" Errors:** Fixed critical bug where invalid JSON in tool call arguments caused 500 server errors. The API returns 500 (not 400) when `tool_calls[].function.arguments` contains:
+  - Empty strings
+  - Plain text (not JSON)
+  - Partial/malformed JSON
+  - Arrays or primitive values (numbers, booleans)
+
+  Now `_sanitize_tool_calls()` validates and repairs arguments:
+  - Invalid JSON → replaced with empty object `{}`
+  - Arrays/primitives → wrapped in object `{"value": ...}`
+  - Re-serializes valid JSON to clean up formatting issues
+
 ## [0.5.34] - 2025-12-03
 
 ### Fixed
