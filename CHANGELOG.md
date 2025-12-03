@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.34] - 2025-12-03
+
+### Fixed
+- **Message Sanitization:** Fixed 400 errors from empty assistant content with tool_calls. Claude API requires non-empty content field for assistant messages with tool_calls. Now always sets placeholder content "." when LLM returns tool_calls without content, preventing "content is required" API errors.
+
+### Added
+- **`sanitize_messages()` Method:** New public method to clean up conversation history before API calls. Fixes:
+  - Empty/None content in assistant messages with tool_calls (causes 400 error)
+  - Empty content in any message role
+  - Invalid message structure
+
+  Call this if you're managing messages externally or encounter "content is required" errors:
+  ```python
+  llm.messages = external_conversation_history
+  llm.sanitize_messages()  # Fix any issues
+  response = llm.prompt("Continue the conversation")
+  ```
+
 ## [0.5.33] - 2025-12-03
 
 ### Changed

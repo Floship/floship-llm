@@ -2063,15 +2063,21 @@ class LLM:
         except Exception:
             raw_content = None
 
-        # Only include content if there's actual text from the LLM
-        # For tool-only responses, omit the content field entirely
+        # IMPORTANT: Claude API requires non-empty content for assistant messages with tool_calls
+        # Always set content - use placeholder if LLM didn't provide any
+        # See: https://docs.anthropic.com/en/docs/build-with-claude/tool-use
         if raw_content and str(raw_content).strip():
             assistant_message["content"] = str(raw_content)
             logger.debug(
                 f"Assistant message has content with tool_calls: "
                 f"{len(str(raw_content))} chars"
             )
-        # Note: For tool-call-only messages, we don't set content at all
+        else:
+            # No content from LLM - use minimal placeholder (API requires non-empty content)
+            assistant_message["content"] = "."
+            logger.debug(
+                "Assistant message with tool_calls has no content, using placeholder"
+            )
 
         self.messages.append(assistant_message)
 
@@ -2586,6 +2592,67 @@ class LLM:
             else:
                 # No more tool calls - return final response
                 return self.process_response(follow_up_response)
+
+    def sanitize_messages(self) -> None:
+        """
+        Sanitize conversation history to fix common issues that cause API errors.
+
+        This method fixes:
+        - Empty/None content in assistant messages with tool_calls (causes 400 error)
+        - Empty content in any message role
+        - Invalid message structure
+
+        Call this before prompt() if you're managing messages externally or
+        if you encounter "content is required" errors.
+
+        Example:
+            llm.messages = external_conversation_history
+            llm.sanitize_messages()  # Fix any issues
+            response = llm.prompt("Continue the conversation")
+        """
+        sanitized = []
+        for i, msg in enumerate(self.messages):
+            if not isinstance(msg, dict):
+                logger.warning(f"Skipping invalid message at index {i}: not a dict")
+                continue
+
+            role = msg.get("role", "").strip().lower()
+            if not role:
+                logger.warning(f"Skipping message at index {i}: no role")
+                continue
+
+            # Copy message to avoid modifying original
+            sanitized_msg = dict(msg)
+
+            # Check for assistant message with tool_calls
+            has_tool_calls = "tool_calls" in sanitized_msg and sanitized_msg.get(
+                "tool_calls"
+            )
+
+            if role == "assistant" and has_tool_calls:
+                # CRITICAL: Claude API requires non-empty content for assistant messages with tool_calls
+                content = sanitized_msg.get("content")
+                if not content or (isinstance(content, str) and not content.strip()):
+                    sanitized_msg["content"] = "."
+                    logger.debug(
+                        f"Sanitized assistant message {i}: added placeholder content"
+                    )
+
+            # Ensure all messages have content
+            if "content" not in sanitized_msg or sanitized_msg["content"] is None:
+                if role == "tool":
+                    sanitized_msg["content"] = "Tool executed successfully"
+                else:
+                    sanitized_msg["content"] = "."
+
+            # Ensure content is a string
+            if not isinstance(sanitized_msg.get("content"), str):
+                sanitized_msg["content"] = str(sanitized_msg.get("content", ""))
+
+            sanitized.append(sanitized_msg)
+
+        self.messages = sanitized
+        logger.debug(f"Sanitized {len(sanitized)} messages")
 
     def _validate_messages_for_api(self, messages: List[Dict]) -> List[Dict]:
         """
