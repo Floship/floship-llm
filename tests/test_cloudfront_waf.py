@@ -344,3 +344,200 @@ class TestUtilityFunctions:
         result = truncate_to_tokens(long_text, 50)
         assert len(result) < len(long_text)
         assert "[truncated]" in result
+
+
+class TestCloudFrontWAFSanitizer:
+    """Tests for CloudFrontWAFSanitizer pattern fixes.
+
+    These tests verify that WAF sanitization patterns don't cause false positives
+    while still blocking actual security threats.
+    """
+
+    def setup_method(self):
+        """Set up test environment."""
+        from floship_llm.client import CloudFrontWAFSanitizer
+
+        self.sanitizer = CloudFrontWAFSanitizer
+
+    def test_path_traversal_ellipsis_preserved_in_json(self):
+        """Test that ellipsis in JSON-encoded code is NOT corrupted.
+
+        This was the production bug: code like print("Loading...")
+        when JSON-encoded becomes print(\"Loading...\") and the
+        ...\\ was being matched by the path traversal pattern.
+        """
+        import json
+
+        code_samples = [
+            'print("Loading...")',
+            'print(f"Description: {x[:200]}...")',
+            'raise ValueError("Invalid input...")',
+            'logger.info(f"Processing {count} items...")',
+        ]
+
+        for code in code_samples:
+            json_str = json.dumps({"code": code})
+            sanitized, _ = self.sanitizer.sanitize(json_str)
+            assert "[PARENT_DIR]" not in sanitized, (
+                f"Ellipsis corrupted in: {code}\nJSON: {json_str}\nResult: {sanitized}"
+            )
+
+    def test_path_traversal_standalone_ellipsis_preserved(self):
+        """Test that standalone ellipsis patterns are preserved."""
+        test_cases = [
+            "...",
+            "....",
+            "Hello...",
+            "Loading... please wait",
+            "Error occurred...\nStack trace follows",
+        ]
+
+        for test in test_cases:
+            sanitized, _ = self.sanitizer.sanitize(test)
+            assert "[PARENT_DIR]" not in sanitized, (
+                f"Ellipsis corrupted: {test} -> {sanitized}"
+            )
+
+    def test_path_traversal_attacks_blocked(self):
+        """Test that actual path traversal attacks are still blocked."""
+        attacks = [
+            ("../etc/passwd", True),
+            ("../../secret", True),
+            ("..\\windows\\system32", True),
+            ('{"file": "../secret.txt"}', True),
+            ("GET /../admin HTTP/1.1", True),
+        ]
+
+        for attack, should_block in attacks:
+            sanitized, _was_sanitized = self.sanitizer.sanitize(attack)
+            if should_block:
+                assert "[PARENT_DIR]" in sanitized, (
+                    f"Attack not blocked: {attack} -> {sanitized}"
+                )
+
+    def test_response_variable_name_preserved(self):
+        """Test that variable names containing 'response' are preserved.
+
+        The pattern should only match bare 'response =' not 'api_response ='.
+        """
+        preserved_cases = [
+            "api_response = get_data()",
+            "http_response = requests.get(url)",
+            "json_response = {}",
+            "_response = None",
+            "my_response = parse()",
+        ]
+
+        for test in preserved_cases:
+            sanitized, _ = self.sanitizer.sanitize(test)
+            assert "resp_var" not in sanitized, (
+                f"False positive on variable name: {test} -> {sanitized}"
+            )
+
+    def test_response_bare_assignment_sanitized(self):
+        """Test that bare 'response =' is still sanitized."""
+        sanitized_cases = [
+            "response = get_data()",
+            "response=value",
+        ]
+
+        for test in sanitized_cases:
+            sanitized, _was_sanitized = self.sanitizer.sanitize(test)
+            assert "resp_var" in sanitized, (
+                f"Bare 'response =' not sanitized: {test} -> {sanitized}"
+            )
+
+    def test_url_template_python_fstring_preserved(self):
+        """Test that Python f-strings with paths are not corrupted.
+
+        Note: Only f-strings starting with quote then brace are protected.
+        Complex cases like f'prefix{/middle}' may still be sanitized.
+        """
+        preserved_cases = [
+            "f'{/path}'",
+            "f'{/data/file}'",
+        ]
+
+        for test in preserved_cases:
+            sanitized, _ = self.sanitizer.sanitize(test)
+            assert "[URL_TEMPLATE]" not in sanitized, (
+                f"f-string corrupted: {test} -> {sanitized}"
+            )
+
+    def test_url_template_github_api_sanitized(self):
+        """Test that GitHub API URL templates are sanitized."""
+        sanitized_cases = [
+            "{/gist_id}",
+            "{/other_user}",
+            "{/repo}",
+        ]
+
+        for test in sanitized_cases:
+            sanitized, _was_sanitized = self.sanitizer.sanitize(test)
+            assert "[URL_TEMPLATE]" in sanitized, (
+                f"GitHub template not sanitized: {test} -> {sanitized}"
+            )
+
+    def test_wiki_markup_python_fstring_preserved(self):
+        """Test that Python f-string escaped braces are not corrupted.
+
+        Note: Only simple cases starting with quote-brace are protected.
+        Complex nested cases may still be sanitized.
+        """
+        preserved_cases = [
+            "f'{{literal}}'",
+            "f'show {{braces}}'",
+        ]
+
+        for test in preserved_cases:
+            sanitized, _ = self.sanitizer.sanitize(test)
+            # Should still have the double braces
+            assert "{{" in sanitized or sanitized == test, (
+                f"f-string escaped braces corrupted: {test} -> {sanitized}"
+            )
+
+    def test_wiki_markup_jira_confluence_sanitized(self):
+        """Test that JIRA/Confluence wiki markup is sanitized."""
+        sanitized_cases = [
+            ("{{code}}", "[code]"),
+            ("{{monospace}}", "[monospace]"),
+        ]
+
+        for test, expected_content in sanitized_cases:
+            sanitized, _was_sanitized = self.sanitizer.sanitize(test)
+            assert expected_content in sanitized, (
+                f"Wiki markup not sanitized: {test} -> {sanitized}"
+            )
+
+    def test_production_failure_scenario(self):
+        """Test the exact production failure scenario that was reported.
+
+        The code: print(f"Description: {ticket.get('description', '')[:200]}...")
+        When JSON-encoded and WAF-sanitized, was being corrupted to:
+        print(f"Description: {ticket.get('description', '')[:200]}.[PARENT_DIR]/")
+        """
+        import json
+
+        # The exact code from the failed production session
+        failed_code = (
+            "print(f\"Description: {ticket.get('description', '')[:200]}...\")"
+        )
+
+        # As tool_call arguments (JSON encoded)
+        tool_call_args = json.dumps({"code": failed_code})
+
+        # Apply sanitization
+        sanitized, _ = self.sanitizer.sanitize(tool_call_args)
+
+        # Verify ellipsis is NOT corrupted
+        assert "[PARENT_DIR]" not in sanitized, (
+            f"Production bug not fixed!\n"
+            f"Original: {failed_code}\n"
+            f"JSON: {tool_call_args}\n"
+            f"Sanitized: {sanitized}"
+        )
+
+        # Verify the original content is preserved
+        assert '..."' in sanitized or "...\\" in sanitized, (
+            f"Ellipsis missing from output: {sanitized}"
+        )

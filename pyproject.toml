@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "floship-llm"
-version = "0.5.35"
+version = "0.5.36"
 description = "A reusable LLM client library for interacting with OpenAI-compatible inference endpoints"
 readme = "README.md"
 authors = [

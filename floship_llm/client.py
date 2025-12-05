@@ -203,9 +203,12 @@ class CloudFrontWAFSanitizer:
             (r"\{\%-?\s*([^%]+?)\s*-?\%\}", r"[DJANGO_TAG:\1]"),
         ],
         "path_traversal": [
-            (r"\.\./", "[PARENT_DIR]/"),
-            (r"\.\.[/\\]", "[PARENT_DIR]/"),
-            (r"\.\.\\\\", "[PARENT_DIR]\\\\"),
+            # Use negative lookbehind to avoid matching ellipsis (...) followed by / or \
+            # The pattern (?<![.]) ensures we don't match when preceded by a dot
+            # This prevents "..." from being corrupted to ".[PARENT_DIR]/" in JSON strings
+            (r"(?<![.])\.\./", "[PARENT_DIR]/"),
+            (r"(?<![.])\.\.[/\\]", "[PARENT_DIR]/"),
+            (r"(?<![.])\.\.\\\\", "[PARENT_DIR]\\\\"),
         ],
         "xss": [
             (r"<script[^>]*>", "[SCRIPT_TAG]"),
@@ -216,7 +219,8 @@ class CloudFrontWAFSanitizer:
             (r"onerror\s*=", "on_error="),
             (r"onload\s*=", "on_load="),
             # 'response =' triggers 'onse =' XSS detection
-            (r"response\s*=", "resp_var ="),
+            # Use word boundary to avoid matching 'api_response =', 'http_response =', etc.
+            (r"(?<![a-zA-Z_])response\s*=", "resp_var ="),
             # HTML tags in strings that trigger XSS
             (r"<span\s+style=", "[SPAN_STYLE]"),
             (r"</span>", "[/SPAN]"),
@@ -227,11 +231,13 @@ class CloudFrontWAFSanitizer:
         ],
         "url_templates": [
             # GitHub API URL templates like {/other_user}, {/gist_id}, etc.
-            (r"\{/[^}]+\}", "[URL_TEMPLATE]"),
+            # Use negative lookbehind to avoid matching Python f-strings like f'{/path}'
+            (r"(?<!')\{/[^}]+\}", "[URL_TEMPLATE]"),
         ],
         "wiki_markup": [
             # JIRA/Confluence wiki markup double curly braces {{text}}
-            (r"\{\{([^}]+)\}\}", r"[\1]"),
+            # Use negative lookbehind to avoid matching Python f-string escaped braces f'{{literal}}'
+            (r"(?<!')\{\{([^}]+)\}\}(?!')", r"[\1]"),
             # JIRA image markup: !image-filename.png|options!
             # Only match if it contains a file extension to avoid false positives
             # Example: !image-20251112-030524.png|width=686,alt="image.png"!
@@ -295,14 +301,37 @@ class CloudFrontWAFSanitizer:
         """
         sanitized = content
         was_sanitized = False
+        changes_made = []  # Track what was changed for debugging
 
-        for _category, patterns in cls.BLOCKERS.items():
+        for category, patterns in cls.BLOCKERS.items():
             for pattern, replacement in patterns:
                 if re.search(pattern, sanitized, re.IGNORECASE):
                     sanitized = re.sub(
                         pattern, replacement, sanitized, flags=re.IGNORECASE
                     )
                     was_sanitized = True
+                    # Log the specific change for debugging 500 errors
+                    changes_made.append(
+                        {
+                            "category": category,
+                            "pattern": pattern,
+                            "replacement": replacement,
+                        }
+                    )
+
+        # Log sanitization details at debug level for troubleshooting
+        if was_sanitized and changes_made:
+            logger.debug(
+                f"WAF sanitization applied {len(changes_made)} change(s): "
+                f"{[c['category'] for c in changes_made]}"
+            )
+            # Log content preview at trace level (very verbose)
+            content_preview = content[:200] + "..." if len(content) > 200 else content
+            sanitized_preview = (
+                sanitized[:200] + "..." if len(sanitized) > 200 else sanitized
+            )
+            logger.debug(f"WAF sanitization preview - Before: {content_preview!r}")
+            logger.debug(f"WAF sanitization preview - After: {sanitized_preview!r}")
 
         return sanitized, was_sanitized
 
@@ -2815,6 +2844,7 @@ class LLM:
             # Validate and sanitize arguments to prevent 500 errors
             # The API returns 500 "Failed to execute chat" for invalid JSON in arguments
             args = func.get("arguments")
+
             if args is not None:
                 if isinstance(args, str):
                     # Validate it's valid JSON
@@ -2825,7 +2855,8 @@ class LLM:
                         if not isinstance(parsed, dict) and parsed is not None:
                             logger.warning(
                                 f"Tool call arguments at message {msg_index} index {tc_index} "
-                                f"is not a JSON object: {type(parsed).__name__}. Wrapping in object."
+                                f"is not a JSON object: {type(parsed).__name__}. Wrapping in object. "
+                                f"Original args preview: {str(args)[:100]!r}"
                             )
                             # Wrap non-object values in an object
                             func["arguments"] = json.dumps({"value": parsed})
@@ -2833,31 +2864,46 @@ class LLM:
                             # Re-serialize to ensure clean JSON (removes trailing commas, etc.)
                             func["arguments"] = json.dumps(parsed)
                     except json.JSONDecodeError as e:
+                        # Log detailed error context for debugging 500 errors
+                        args_preview = str(args)[:200] if args else "<empty>"
                         logger.warning(
                             f"Invalid JSON in tool call arguments at message {msg_index} "
-                            f"index {tc_index}: {e}. Using empty object."
+                            f"index {tc_index}: {e}. Using empty object. "
+                            f"Tool name: {name}. Args preview: {args_preview!r}"
                         )
                         # Replace invalid JSON with empty object to prevent 500 error
                         func["arguments"] = "{}"
 
                     # Sanitize arguments for WAF if enabled
                     if self.waf_config.enable_waf_sanitization:
-                        func["arguments"], _ = CloudFrontWAFSanitizer.sanitize(
-                            func["arguments"]
+                        func["arguments"], was_sanitized = (
+                            CloudFrontWAFSanitizer.sanitize(func["arguments"])
                         )
+                        if was_sanitized:
+                            logger.debug(
+                                f"WAF sanitized tool call args at message {msg_index} index {tc_index}. "
+                                f"Tool: {name}"
+                            )
                 elif isinstance(args, dict):
                     # Already a dict, serialize it
                     func["arguments"] = json.dumps(args)
+                    logger.debug(
+                        f"Serialized dict arguments for tool {name} at message {msg_index}"
+                    )
                 else:
                     # Unknown type, use empty object
                     logger.warning(
                         f"Unexpected arguments type at message {msg_index} index {tc_index}: "
-                        f"{type(args).__name__}. Using empty object."
+                        f"{type(args).__name__}. Tool: {name}. Using empty object. "
+                        f"Original value: {str(args)[:100]!r}"
                     )
                     func["arguments"] = "{}"
             else:
                 # No arguments, use empty object
                 func["arguments"] = "{}"
+                logger.debug(
+                    f"No arguments provided for tool {name} at message {msg_index}, using empty object"
+                )
 
             sanitized_tc["function"] = func
             sanitized_tool_calls.append(sanitized_tc)
