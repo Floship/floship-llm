@@ -13,7 +13,10 @@ class RetryHandler:
     """Handles retry logic for API calls with configurable backoff."""
 
     # Retryable status codes (transient errors that may succeed on retry)
-    RETRYABLE_STATUS_CODES = {429, 502, 503, 504}
+    # 408: Request Timeout - Heroku/server timeout, should retry with streaming
+    # 429: Rate limit - should retry with backoff
+    # 502, 503, 504: Server errors - transient, should retry
+    RETRYABLE_STATUS_CODES = {408, 429, 502, 503, 504}
 
     # Non-retryable status codes (permanent errors or CloudFront WAF blocks)
     NON_RETRYABLE_STATUS_CODES = {400, 401, 403, 404, 500}
@@ -68,6 +71,10 @@ class RetryHandler:
                 if status_code not in self.RETRYABLE_STATUS_CODES:
                     raise
 
+                # Special handling for 408 timeout errors
+                if status_code == 408:
+                    self._log_408_error(e, attempt)
+
                 # Calculate delay with linear backoff
                 delay = self.base_delay * (attempt + 1)
                 logger.warning(
@@ -95,11 +102,52 @@ class RetryHandler:
 
         # All retries exhausted
         if last_exception:
-            logger.error(
+            status_code = None
+            if isinstance(last_exception, APIStatusError) and last_exception.response:
+                status_code = last_exception.response.status_code
+
+            error_msg = (
                 f"API call failed after {self.max_retries} attempts. "
                 f"Last error: {last_exception}"
             )
+
+            # Add specific guidance for 408 timeout errors
+            if status_code == 408:
+                error_msg += (
+                    " | RECOMMENDATION: This 408 timeout likely occurred because "
+                    "the response took too long. Consider using streaming mode "
+                    "(stream=True) or reducing response length. If tools are enabled, "
+                    "try disabling them or using stream_final_response=True."
+                )
+
+            logger.error(error_msg)
             raise last_exception
+
+    def _log_408_error(self, error: APIStatusError, attempt: int) -> None:
+        """
+        Log detailed information about 408 timeout errors.
+
+        Args:
+            error: The API status error
+            attempt: Current attempt number
+        """
+        error_body = str(error.body) if error.body else "No error body"
+
+        logger.warning(
+            f"408 Request Timeout detected (attempt {attempt + 1}/{self.max_retries}). "
+            f"The server took too long to respond. This often happens with: "
+            f"1) Long responses without streaming, "
+            f"2) Complex tool calls, "
+            f"3) High server load. "
+            f"Error details: {error_body}"
+        )
+
+        # Check for streaming recommendation in error
+        if "streaming" in error_body.lower() or "long" in error_body.lower():
+            logger.warning(
+                "Server suggests using streaming mode. "
+                "Enable streaming with stream=True or use prompt() which streams by default."
+            )
 
     def _log_403_error(self, error: APIStatusError, attempt: int) -> None:
         """

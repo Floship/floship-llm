@@ -190,7 +190,7 @@ class TestRetryHandler:
 
     def test_retryable_status_codes(self):
         """Test all retryable status codes."""
-        retryable_codes = [429, 502, 503, 504]
+        retryable_codes = [408, 429, 502, 503, 504]
 
         for status_code in retryable_codes:
             handler = RetryHandler()
@@ -211,6 +211,59 @@ class TestRetryHandler:
 
             assert result == "success"
             assert mock_func.call_count == 2
+
+    def test_408_timeout_retry_and_logging(self):
+        """Test that 408 timeout errors are retried with helpful logging."""
+        handler = RetryHandler(max_retries=2)
+        mock_response = Mock()
+        mock_response.status_code = 408
+
+        mock_func = Mock(
+            side_effect=[
+                APIStatusError(
+                    "Request timed out. Please use streaming for long responses.",
+                    response=mock_response,
+                    body={"error": "Request timed out"},
+                ),
+                "success",
+            ]
+        )
+
+        with patch("time.sleep"):
+            with patch("floship_llm.retry_handler.logger") as mock_logger:
+                result = handler.execute_with_retry(mock_func)
+
+                # Verify 408-specific logging occurred
+                warning_calls = [str(c) for c in mock_logger.warning.call_args_list]
+                assert any("408" in call for call in warning_calls)
+                assert any("timeout" in call.lower() for call in warning_calls)
+
+        assert result == "success"
+        assert mock_func.call_count == 2
+
+    def test_408_timeout_exhausted_retries(self):
+        """Test that 408 errors show helpful message when retries exhausted."""
+        handler = RetryHandler(max_retries=2)
+        mock_response = Mock()
+        mock_response.status_code = 408
+
+        error = APIStatusError(
+            "Request timed out",
+            response=mock_response,
+            body={"error": "Request timed out"},
+        )
+        mock_func = Mock(side_effect=error)
+
+        with patch("time.sleep"):
+            with patch("floship_llm.retry_handler.logger") as mock_logger:
+                with pytest.raises(APIStatusError):
+                    handler.execute_with_retry(mock_func)
+
+                # Verify final error message mentions streaming recommendation
+                error_calls = [str(c) for c in mock_logger.error.call_args_list]
+                assert any("streaming" in call.lower() for call in error_calls)
+
+        assert mock_func.call_count == 2
 
     def test_non_retryable_status_codes(self):
         """Test all non-retryable status codes."""

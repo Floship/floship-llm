@@ -640,6 +640,31 @@ class LLM:
         error_str = str(error).lower()
         return "403" in error_str or "forbidden" in error_str
 
+    def _is_timeout_408(self, error: Exception) -> bool:
+        """
+        Check if error is a 408 Request Timeout error.
+
+        408 errors typically occur when:
+        - Response takes too long without streaming
+        - Heroku/server timeout limits are exceeded
+        - Complex tool calls take too long
+
+        Args:
+            error: Exception to check
+
+        Returns:
+            True if error is a 408 timeout
+        """
+        from openai import APIStatusError
+
+        if isinstance(error, APIStatusError):
+            status_code = error.response.status_code if error.response else None
+            if status_code == 408:
+                return True
+
+        error_str = str(error).lower()
+        return "408" in error_str or "request timed out" in error_str
+
     def _should_disable_extended_thinking(self, error: Exception) -> bool:
         """
         Detect validation errors caused by extended thinking payload requirements.
@@ -1542,6 +1567,23 @@ class LLM:
                             "Extended thinking was rejected by the API; retrying without extended_thinking."
                         )
                         continue
+
+                    # Check if it's a 408 timeout error - auto-recover by enabling streaming
+                    if self._is_timeout_408(e) and not use_streaming:
+                        logger.warning(
+                            "408 Request Timeout detected. This often occurs when tools are enabled "
+                            "and the response is too long. The request will be retried by the retry handler. "
+                            "Consider using stream_final_response=True for long responses with tools."
+                        )
+                        # Log helpful debugging information
+                        logger.info(
+                            f"408 Debug: use_streaming={use_streaming}, "
+                            f"enable_tools={self.enable_tools}, "
+                            f"tools_count={len(self.tool_manager.tools) if self.tool_manager else 0}, "
+                            f"message_count={len(self.messages)}"
+                        )
+                        # Let the retry handler handle the retry
+                        raise
 
                     # Check if it's a CloudFront 403 error
                     if (
