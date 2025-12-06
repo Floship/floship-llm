@@ -385,6 +385,34 @@ class TestCloudFrontCompatibility:
         assert "…'" not in desanitized
         assert "...'" in desanitized
 
+    def test_html_entities_desanitization_to_characters(self):
+        """Test that HTML entity placeholders are restored to actual characters, not HTML entities.
+
+        When user types "duty & tax", Slack converts & to &amp;, which gets sanitized to [AMP].
+        On desanitization, user should see "duty & tax" (actual &), not "duty &amp; tax".
+        """
+        from floship_llm.client import CloudFrontWAFSanitizer
+
+        # Test ampersand - most common case from Slack
+        content = "any duty [AMP] tax for this order"
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(content)
+        assert was_desanitized is True
+        assert "[AMP]" not in desanitized
+        assert "&amp;" not in desanitized  # Should NOT be HTML entity
+        assert "duty & tax" in desanitized  # Should be actual ampersand
+
+        # Test other HTML entities
+        content = "Value [LT] 100 and [GT] 50"
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(content)
+        assert was_desanitized is True
+        assert "Value < 100 and > 50" in desanitized
+
+        # Test quotes
+        content = "He said [QUOT]hello[QUOT]"
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(content)
+        assert was_desanitized is True
+        assert 'He said "hello"' in desanitized
+
 
 class TestBackwardCompatibility:
     """Tests to ensure backward compatibility."""

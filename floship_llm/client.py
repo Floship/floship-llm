@@ -278,10 +278,10 @@ class CloudFrontWAFSanitizer:
         "os_system": "os.system",
         "resp_var =": "response =",
         "format_html_func(": "format_html(",
-        "[QUOT]": "&quot;",
-        "[LT]": "&lt;",
-        "[GT]": "&gt;",
-        "[AMP]": "&amp;",
+        "[QUOT]": '"',  # Restore to actual quote, not HTML entity
+        "[LT]": "<",  # Restore to actual less-than, not HTML entity
+        "[GT]": ">",  # Restore to actual greater-than, not HTML entity
+        "[AMP]": "&",  # Restore to actual ampersand, not HTML entity
         "[SPAN_STYLE]": "<span style=",
         "[/SPAN]": "</span>",
         "[A_HREF]": "<a href=",

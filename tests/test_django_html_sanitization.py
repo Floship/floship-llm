@@ -110,4 +110,6 @@ class TestDjangoHTMLSanitization:
         # Verify restoration
         assert "format_html(" in desanitized
         assert "<span style=" in desanitized
-        assert "&quot;" in desanitized
+        # v0.5.40: HTML entities now desanitize to actual characters, not HTML entities
+        # So [QUOT] becomes " not &quot;
+        assert '"Error"' in desanitized
