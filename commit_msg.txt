@@ -1,0 +1,22 @@
+fix: Distinguish 403 authorization errors from WAF blocks (v0.5.38)
+
+PROBLEM:
+- 403 'you do not have access to that model' errors were being
+  incorrectly treated as CloudFront WAF blocks
+- This caused unnecessary retries and misleading CloudFrontWAFError
+- Real issue was API key lacking model access, not content blocking
+
+FIX:
+- Enhanced _is_cloudfront_403() to check for authorization indicators
+- Now excludes errors containing:
+  - 'you do not have access to that model'
+  - 'authorization_error'
+  - 'invalid api key' / 'invalid_api_key'
+  - 'unauthorized' / 'authentication'
+- Only generic 403/forbidden errors are treated as WAF blocks
+
+TESTS:
+- Added test_403_model_authorization_error_not_treated_as_waf
+- Added test_403_api_key_error_not_treated_as_waf
+- Added test_403_generic_forbidden_treated_as_waf
+- All 494 tests passing

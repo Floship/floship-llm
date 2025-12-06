@@ -264,6 +264,79 @@ class TestCloudFrontCompatibility:
             with pytest.raises(APIStatusError):
                 llm.prompt("Test prompt")
 
+    def test_403_model_authorization_error_not_treated_as_waf(self):
+        """Test that 403 model authorization errors are NOT treated as WAF blocks.
+
+        When a user doesn't have access to a model (e.g., claude-4-5-sonnet),
+        the API returns a 403 with "you do not have access to that model".
+        This should NOT be retried as a WAF block - it should fail immediately.
+        """
+        with patch("floship_llm.client.OpenAI"):
+            from openai import PermissionDeniedError
+
+            llm = LLM()
+
+            # Create a mock 403 authorization error (not WAF)
+            mock_response = Mock()
+            mock_response.status_code = 403
+
+            error = PermissionDeniedError(
+                message='Error code: 403 - {"error": "{\\"code\\":403,\\"message\\":\\"you do not have access to that model\\",\\"type\\":\\"authorization_error\\"}"}',
+                response=mock_response,
+                body={
+                    "error": {
+                        "code": 403,
+                        "message": "you do not have access to that model",
+                        "type": "authorization_error",
+                    }
+                },
+            )
+
+            # This should NOT be detected as a CloudFront WAF error
+            assert llm._is_cloudfront_403(error) is False
+
+    def test_403_api_key_error_not_treated_as_waf(self):
+        """Test that 403 API key errors are NOT treated as WAF blocks."""
+        with patch("floship_llm.client.OpenAI"):
+            from openai import PermissionDeniedError
+
+            llm = LLM()
+
+            # Create a mock 403 invalid API key error
+            mock_response = Mock()
+            mock_response.status_code = 403
+
+            error = PermissionDeniedError(
+                message="Invalid API key",
+                response=mock_response,
+                body={
+                    "error": {"message": "Invalid API key", "type": "invalid_api_key"}
+                },
+            )
+
+            # This should NOT be detected as a CloudFront WAF error
+            assert llm._is_cloudfront_403(error) is False
+
+    def test_403_generic_forbidden_treated_as_waf(self):
+        """Test that generic 403 forbidden IS treated as WAF block."""
+        with patch("floship_llm.client.OpenAI"):
+            from openai import PermissionDeniedError
+
+            llm = LLM()
+
+            # Create a mock generic 403 error (CloudFront WAF)
+            mock_response = Mock()
+            mock_response.status_code = 403
+
+            error = PermissionDeniedError(
+                message="403 Forbidden - Request blocked",
+                response=mock_response,
+                body={"error": "The request could not be satisfied"},
+            )
+
+            # This SHOULD be detected as a CloudFront WAF error
+            assert llm._is_cloudfront_403(error) is True
+
 
 class TestBackwardCompatibility:
     """Tests to ensure backward compatibility."""

@@ -626,18 +626,43 @@ class LLM:
 
     def _is_cloudfront_403(self, error: Exception) -> bool:
         """
-        Check if error is a CloudFront 403 error.
+        Check if error is a CloudFront WAF 403 error (content blocked).
+
+        This distinguishes between:
+        - CloudFront WAF blocks: Generic "forbidden" from content filtering
+        - Authorization errors: "you do not have access to that model" (API key permissions)
 
         Args:
             error: Exception to check
 
         Returns:
-            True if error is CloudFront 403
+            True if error is CloudFront WAF 403 (not an authorization error)
         """
         if not isinstance(error, PermissionDeniedError):
             return False
 
         error_str = str(error).lower()
+
+        # Check if it's an authorization error (NOT a WAF block)
+        authorization_indicators = [
+            "you do not have access to that model",
+            "authorization_error",
+            "invalid api key",
+            "api key",
+            "unauthorized",
+            "invalid_api_key",
+            "authentication",
+        ]
+
+        for indicator in authorization_indicators:
+            if indicator in error_str:
+                # This is an API authorization error, not a WAF block
+                logger.debug(
+                    f"403 error is an authorization error, not WAF: {indicator}"
+                )
+                return False
+
+        # Only treat as WAF if it's a generic 403/forbidden without auth indicators
         return "403" in error_str or "forbidden" in error_str
 
     def _is_timeout_408(self, error: Exception) -> bool:
