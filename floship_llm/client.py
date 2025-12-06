@@ -209,6 +209,11 @@ class CloudFrontWAFSanitizer:
             (r"(?<![.])\.\./", "[PARENT_DIR]/"),
             (r"(?<![.])\.\.[/\\]", "[PARENT_DIR]/"),
             (r"(?<![.])\.\.\\\\", "[PARENT_DIR]\\\\"),
+            # Handle ellipsis followed by escaped quote in JSON strings
+            # Pattern: ..."  (ellipsis then escaped quote) triggers WAF's path_traversal_backslash
+            # because it sees ..\" as ..\  - replace with safe Unicode ellipsis
+            (r'\.\.\.\\?"', '…"'),  # Replace ...\" or ..." with …"
+            (r"\.\.\.\\?'", "…'"),  # Replace ...\' or ...' with …'
         ],
         "xss": [
             (r"<script[^>]*>", "[SCRIPT_TAG]"),
@@ -283,6 +288,9 @@ class CloudFrontWAFSanitizer:
         "[/A]": "</a>",
         "[HEADING]": "<H",
         "[/HEADING]": "</H",
+        # Ellipsis sanitization reverse mappings
+        '…"': '..."',
+        "…'": "...'",
         # Restore Django/Jinja template tags
         "[DJANGO_TAG:": "{% ",  # handled via regex in desanitize
     }

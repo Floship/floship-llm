@@ -337,6 +337,54 @@ class TestCloudFrontCompatibility:
             # This SHOULD be detected as a CloudFront WAF error
             assert llm._is_cloudfront_403(error) is True
 
+    def test_ellipsis_before_quote_sanitization(self):
+        """Test that ellipsis followed by quote is sanitized to prevent WAF path_traversal_backslash.
+
+        CloudFront WAF sees '..."' as '..\' (path traversal) when JSON-escaped.
+        Pattern: 'Never say "I ran this code..."' becomes '..."' which triggers WAF.
+        Fix: Replace '..."' with '…"' (Unicode ellipsis).
+        """
+        from floship_llm.client import CloudFrontWAFSanitizer
+
+        # Test double quote case
+        content = 'Never say "I ran this code..."'
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized is True
+        assert '..."' not in sanitized
+        assert '…"' in sanitized  # Unicode ellipsis
+
+        # Test single quote case
+        content = "Use their name, store facts as 'Milk Li is...'"
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized is True
+        assert "...'" not in sanitized
+        assert "…'" in sanitized  # Unicode ellipsis
+
+        # Test JSON-escaped quote case (the actual trigger)
+        content = r"jql_query=\"...\""
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized is True
+        # The escaped quote should also be handled
+        assert r"...\"" not in sanitized or "…" in sanitized
+
+    def test_ellipsis_quote_desanitization(self):
+        """Test that Unicode ellipsis is restored to ASCII ellipsis on desanitization."""
+        from floship_llm.client import CloudFrontWAFSanitizer
+
+        # Test double quote case
+        content = 'The response said "hello…"'
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(content)
+        assert was_desanitized is True
+        assert '…"' not in desanitized
+        assert '..."' in desanitized
+
+        # Test single quote case
+        content = "Use 'example…' here"
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(content)
+        assert was_desanitized is True
+        assert "…'" not in desanitized
+        assert "...'" in desanitized
+
 
 class TestBackwardCompatibility:
     """Tests to ensure backward compatibility."""
@@ -588,6 +636,9 @@ class TestCloudFrontWAFSanitizer:
         The code: print(f"Description: {ticket.get('description', '')[:200]}...")
         When JSON-encoded and WAF-sanitized, was being corrupted to:
         print(f"Description: {ticket.get('description', '')[:200]}.[PARENT_DIR]/")
+
+        Update v0.5.39: Now '..."' is sanitized to '…"' (Unicode ellipsis) to prevent
+        CloudFront WAF path_traversal_backslash detection.
         """
         import json
 
@@ -602,7 +653,7 @@ class TestCloudFrontWAFSanitizer:
         # Apply sanitization
         sanitized, _ = self.sanitizer.sanitize(tool_call_args)
 
-        # Verify ellipsis is NOT corrupted
+        # Verify ellipsis is NOT corrupted to path traversal
         assert "[PARENT_DIR]" not in sanitized, (
             f"Production bug not fixed!\n"
             f"Original: {failed_code}\n"
@@ -610,7 +661,8 @@ class TestCloudFrontWAFSanitizer:
             f"Sanitized: {sanitized}"
         )
 
-        # Verify the original content is preserved
-        assert '..."' in sanitized or "...\\" in sanitized, (
+        # Verify content is preserved (either original ellipsis or Unicode ellipsis)
+        # v0.5.39: '..."' is now sanitized to '…"' to prevent WAF path_traversal_backslash
+        assert '..."' in sanitized or "...\\" in sanitized or '…"' in sanitized, (
             f"Ellipsis missing from output: {sanitized}"
         )
