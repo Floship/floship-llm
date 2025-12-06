@@ -439,6 +439,9 @@ class LLM:
             max_tool_response_tokens: Max tokens in tool responses (default: 4000)
             track_tool_metadata: Track tool execution metadata (default: False)
             stream: Enable streaming responses (default: False)
+            on_assistant_message: Callback for assistant messages during tool execution (default: None)
+                Signature: (content: str, has_tool_calls: bool) -> None
+                Called with intermediary messages (has_tool_calls=True) and final messages (has_tool_calls=False)
 
             CloudFront WAF Protection (NEW):
             enable_waf_sanitization: Auto-sanitize content to prevent CloudFront WAF blocking (default: True)
@@ -560,6 +563,12 @@ class LLM:
         # Tool configuration
         self.enable_tools = kwargs.get("enable_tools", False)
         self.tool_request_delay = float(os.environ.get("LLM_TOOL_REQUEST_DELAY", "0"))
+
+        # Assistant message callback for real-time updates during tool execution
+        # Called with (content: str, has_tool_calls: bool) when assistant responds
+        self.on_assistant_message: Optional[Callable[[str, bool], None]] = kwargs.get(
+            "on_assistant_message"
+        )
 
         # Tool call tracking (for monitoring and budgeting)
         self._current_tool_call_count = 0
@@ -1795,7 +1804,19 @@ class LLM:
 
                 # Add complete response to conversation history
                 if full_response:
-                    self.add_message("assistant", full_response)
+                    # Store raw response for debugging (includes thinking tags)
+                    self._last_raw_response = full_response
+
+                    # When extended_thinking is enabled, preserve thinking tags in message history
+                    # Claude requires thinking blocks in assistant messages for multi-turn conversations
+                    if self.extended_thinking and self.extended_thinking.get("enabled"):
+                        self.add_message("assistant", full_response)
+                    else:
+                        # Remove thinking tags for message history when thinking is disabled
+                        clean_response = re.sub(
+                            r"<think>.*?</think>", "", full_response, flags=re.DOTALL
+                        ).strip()
+                        self.add_message("assistant", clean_response)
 
                 # Track successful retry
                 if waf_attempt > 0:
@@ -1966,10 +1987,13 @@ class LLM:
             logger.warning("Received empty response from LLM")
             return ""
 
-        message = choice.message.content.strip()
+        raw_message = choice.message.content.strip()
 
-        # Remove thinking tags
-        message = re.sub(r"<think>.*?</think>", "", message, flags=re.DOTALL)
+        # Store raw response for debugging (includes thinking tags)
+        self._last_raw_response = raw_message
+
+        # Remove thinking tags for the user-facing response
+        message = re.sub(r"<think>.*?</think>", "", raw_message, flags=re.DOTALL)
 
         # Extract response tags if present
         if "<response>" in message and "</response>" in message:
@@ -1984,7 +2008,21 @@ class LLM:
             if retry_result is not None:
                 return retry_result
 
-        self.add_message("assistant", message)
+        # When extended_thinking is enabled, preserve thinking tags in message history
+        # Claude requires thinking blocks in assistant messages for multi-turn conversations
+        if self.extended_thinking and self.extended_thinking.get("enabled"):
+            self.add_message("assistant", raw_message)
+        else:
+            self.add_message("assistant", message)
+
+        # Invoke callback for final assistant message (no tool calls)
+        if self.on_assistant_message:
+            try:
+                self.on_assistant_message(message.strip(), False)
+            except Exception as callback_error:
+                logger.warning(
+                    f"on_assistant_message callback raised an exception: {callback_error}"
+                )
 
         # Handle structured output
         if self.require_response_format:
@@ -2015,18 +2053,18 @@ class LLM:
             logger.warning("Received empty response from streaming")
             return ""
 
-        message = full_response.strip()
+        raw_message = full_response.strip()
 
-        # Store raw response for debugging
-        self._last_raw_response = message
+        # Store raw response for debugging (includes thinking tags)
+        self._last_raw_response = raw_message
 
         if self.waf_config.debug_mode:
             logger.debug(
-                f"Raw streaming response ({len(message)} chars): {message[:500]}..."
+                f"Raw streaming response ({len(raw_message)} chars): {raw_message[:500]}..."
             )
 
-        # Remove thinking tags
-        message = re.sub(r"<think>.*?</think>", "", message, flags=re.DOTALL)
+        # Remove thinking tags for the user-facing response
+        message = re.sub(r"<think>.*?</think>", "", raw_message, flags=re.DOTALL)
 
         # Extract response tags if present
         if "<response>" in message and "</response>" in message:
@@ -2041,7 +2079,21 @@ class LLM:
             if retry_result is not None:
                 return retry_result
 
-        self.add_message("assistant", message)
+        # When extended_thinking is enabled, preserve thinking tags in message history
+        # Claude requires thinking blocks in assistant messages for multi-turn conversations
+        if self.extended_thinking and self.extended_thinking.get("enabled"):
+            self.add_message("assistant", raw_message)
+        else:
+            self.add_message("assistant", message)
+
+        # Invoke callback for final assistant message (no tool calls)
+        if self.on_assistant_message:
+            try:
+                self.on_assistant_message(message.strip(), False)
+            except Exception as callback_error:
+                logger.warning(
+                    f"on_assistant_message callback raised an exception: {callback_error}"
+                )
 
         # Handle structured output
         if self.require_response_format:
@@ -2182,6 +2234,21 @@ class LLM:
             logger.debug(
                 "Assistant message with tool_calls has no content, using placeholder"
             )
+
+        # Invoke callback for intermediary assistant messages during tool execution
+        # This allows apps (e.g., Slack bots) to show "thinking" messages in real-time
+        if self.on_assistant_message:
+            content_for_callback = (
+                str(raw_content).strip()
+                if raw_content and str(raw_content).strip()
+                else ""
+            )
+            try:
+                self.on_assistant_message(content_for_callback, True)
+            except Exception as callback_error:
+                logger.warning(
+                    f"on_assistant_message callback raised an exception: {callback_error}"
+                )
 
         self.messages.append(assistant_message)
 
@@ -2503,7 +2570,22 @@ class LLM:
 
                     # Add complete response to conversation history
                     if full_response:
-                        self.add_message("assistant", full_response)
+                        # Store raw response for debugging
+                        self._last_raw_response = full_response
+
+                        # When extended_thinking is enabled, preserve thinking tags in history
+                        if self.extended_thinking and self.extended_thinking.get(
+                            "enabled"
+                        ):
+                            self.add_message("assistant", full_response)
+                        else:
+                            clean_response = re.sub(
+                                r"<think>.*?</think>",
+                                "",
+                                full_response,
+                                flags=re.DOTALL,
+                            ).strip()
+                            self.add_message("assistant", clean_response)
 
                 return generate_streamed_response()
             else:

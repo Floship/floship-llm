@@ -623,6 +623,144 @@ class TestLLM:
             # But internal processing should remove think tags
             assert llm.messages[-1]["content"] == "Final response"
 
+    def test_extended_thinking_preserves_thinking_tags_in_history(self):
+        """Test that extended thinking preserves thinking tags in message history."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(
+                extended_thinking={"enabled": True, "budget_tokens": 1024},
+                continuous=True,
+            )
+
+            mock_choice = Mock()
+            mock_choice.message.content = (
+                "<think>I'm reasoning about this</think>Here is my response"
+            )
+            mock_choice.message.tool_calls = None
+            mock_response = Mock()
+            mock_response.choices = [mock_choice]
+
+            result = llm.process_response(mock_response)
+
+            # Returns original content
+            assert (
+                result == "<think>I'm reasoning about this</think>Here is my response"
+            )
+            # Message history should preserve thinking tags for extended_thinking
+            assert llm.messages[-1]["role"] == "assistant"
+            assert "<think>" in llm.messages[-1]["content"]
+            assert "I'm reasoning about this" in llm.messages[-1]["content"]
+
+    def test_extended_thinking_disabled_strips_thinking_tags_from_history(self):
+        """Test that without extended thinking, thinking tags are stripped from history."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(continuous=True)  # No extended_thinking
+
+            mock_choice = Mock()
+            mock_choice.message.content = "<think>Some thinking</think>Final response"
+            mock_choice.message.tool_calls = None
+            mock_response = Mock()
+            mock_response.choices = [mock_choice]
+
+            llm.process_response(mock_response)
+
+            # Message history should NOT have thinking tags
+            assert llm.messages[-1]["role"] == "assistant"
+            assert "<think>" not in llm.messages[-1]["content"]
+            assert llm.messages[-1]["content"] == "Final response"
+
+    def test_on_assistant_message_callback_with_tool_calls(self):
+        """Test on_assistant_message callback is called with tool calls."""
+        with patch("floship_llm.client.OpenAI"):
+            callback_calls = []
+
+            def callback(content: str, has_tool_calls: bool):
+                callback_calls.append(
+                    {"content": content, "has_tool_calls": has_tool_calls}
+                )
+
+            llm = LLM(enable_tools=True, on_assistant_message=callback)
+
+            # Create mock message with tool calls
+            mock_message = Mock()
+            mock_message.content = "Let me search for that"
+            mock_tool_call = Mock()
+            mock_tool_call.id = "call_123"
+            mock_tool_call.function.name = "search"
+            mock_tool_call.function.arguments = '{"query": "test"}'
+            mock_message.tool_calls = [mock_tool_call]
+
+            mock_response = Mock()
+            mock_response.choices = [Mock(message=mock_message)]
+
+            # Mock tool execution to avoid actual execution
+            with patch.object(llm.tool_manager, "execute_tool") as mock_exec:
+                mock_result = Mock()
+                mock_result.content = "Search results"
+                mock_exec.return_value = mock_result
+
+                # Mock follow-up response (final response without tool calls)
+                mock_final_choice = Mock()
+                mock_final_choice.message.content = "Here are the results"
+                mock_final_choice.message.tool_calls = None
+                mock_final_response = Mock()
+                mock_final_response.choices = [mock_final_choice]
+
+                with patch.object(
+                    llm.retry_handler,
+                    "execute_with_retry",
+                    return_value=mock_final_response,
+                ):
+                    llm._handle_tool_calls(mock_message, mock_response)
+
+            # Callback should have been called for intermediary message
+            assert len(callback_calls) >= 1
+            assert callback_calls[0]["content"] == "Let me search for that"
+            assert callback_calls[0]["has_tool_calls"] is True
+
+    def test_on_assistant_message_callback_final_response(self):
+        """Test on_assistant_message callback is called for final response."""
+        with patch("floship_llm.client.OpenAI"):
+            callback_calls = []
+
+            def callback(content: str, has_tool_calls: bool):
+                callback_calls.append(
+                    {"content": content, "has_tool_calls": has_tool_calls}
+                )
+
+            llm = LLM(on_assistant_message=callback)
+
+            mock_choice = Mock()
+            mock_choice.message.content = "Here is my final answer"
+            mock_choice.message.tool_calls = None
+            mock_response = Mock()
+            mock_response.choices = [mock_choice]
+
+            llm.process_response(mock_response)
+
+            # Callback should be called with final response
+            assert len(callback_calls) == 1
+            assert callback_calls[0]["content"] == "Here is my final answer"
+            assert callback_calls[0]["has_tool_calls"] is False
+
+    def test_on_assistant_message_callback_exception_handled(self):
+        """Test that exceptions in callback are handled gracefully."""
+        with patch("floship_llm.client.OpenAI"):
+
+            def bad_callback(content: str, has_tool_calls: bool):
+                raise ValueError("Callback error!")
+
+            llm = LLM(on_assistant_message=bad_callback)
+
+            mock_choice = Mock()
+            mock_choice.message.content = "Response"
+            mock_choice.message.tool_calls = None
+            mock_response = Mock()
+            mock_response.choices = [mock_choice]
+
+            # Should not raise, but handle gracefully
+            result = llm.process_response(mock_response)
+            assert result == "Response"
+
     def test_process_response_with_response_tags(self):
         """Test response processing with response tags."""
         with patch("floship_llm.client.OpenAI"):
