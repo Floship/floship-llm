@@ -9,12 +9,18 @@ import time
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from openai import APIStatusError, InternalServerError, OpenAI, PermissionDeniedError
-from pydantic import BaseModel
+from openai import (
+    APIStatusError,
+    BadRequestError,
+    InternalServerError,
+    OpenAI,
+    PermissionDeniedError,
+)
+from pydantic import BaseModel, Field
 
 from .content_processor import ContentProcessor
 from .retry_handler import RetryHandler
-from .schemas import ToolCall, ToolFunction, ToolResult
+from .schemas import ThinkingModel, ToolCall, ToolFunction, ToolResult
 from .tool_manager import TOOL_NAME_PATTERN, ToolManager
 from .utils import lm_json_utils
 
@@ -532,11 +538,20 @@ class LLM:
         self.presence_penalty = kwargs.get("presence_penalty")
 
         # Response format (structured output)
-        self.response_format = kwargs.get("response_format")
+        self._original_response_format = kwargs.get("response_format")
+        self._response_format_wrapped = False
+        # Track if thinking was auto-disabled (needed before _ensure_thinking_in_response_format)
+        self._thinking_auto_disabled = False
+        # Store original extended_thinking before response_format may disable it
+        self._original_extended_thinking = self.extended_thinking
+        self.response_format = self._original_response_format
         if self.response_format and not issubclass(self.response_format, BaseModel):
             raise ValueError(
                 "response_format must be a subclass of BaseModel (pydantic)"
             )
+        # Auto-wrap response_format with thinking field if needed
+        if self.response_format:
+            self._ensure_thinking_in_response_format()
 
         # Conversation management
         self.continuous = kwargs.get("continuous", True)
@@ -578,6 +593,15 @@ class LLM:
 
         # Debug tracking - store last raw response for debugging
         self._last_raw_response = None
+        # Store last structured thinking (from wrapped response_format)
+        self._last_structured_thinking = None
+
+        # Extended thinking state management
+        # Note: _original_extended_thinking and _thinking_auto_disabled are initialized
+        # earlier (before _ensure_thinking_in_response_format) to allow response_format
+        # to disable extended_thinking when schema-based thinking is used
+        # Use pseudo-thinking (prompt-based) when native thinking is rejected
+        self._use_pseudo_thinking = False
 
         # Backward compatibility - maintain tools dict reference
         self.tools = self.tool_manager.tools
@@ -595,6 +619,20 @@ class LLM:
             The last raw response string, or None if no response yet.
         """
         return self._last_raw_response
+
+    def get_last_structured_thinking(self) -> Optional[str]:
+        """Get the thinking/reasoning from the last structured response.
+
+        When using response_format that doesn't extend ThinkingModel,
+        the library automatically wraps it to capture Claude's reasoning.
+        This method returns that captured thinking.
+
+        Returns:
+            The thinking string from the last structured response, or None
+            if no structured response was made or if the model already
+            had a thinking field (not wrapped).
+        """
+        return self._last_structured_thinking
 
     def _validate_environment(self):
         """Validate required environment variables."""
@@ -741,6 +779,116 @@ class LLM:
             return any(trigger in error_str for trigger in triggers)
 
         return False
+
+    def _is_context_length_error(self, error: Exception) -> bool:
+        """
+        Detect if error is caused by context length exceeding limits.
+
+        This helps identify when we need to trim conversation history
+        to fit within model limits.
+
+        Returns:
+            True if error is related to context length
+        """
+        status_code = getattr(error, "status_code", None) or getattr(
+            error, "status", None
+        )
+        error_str = str(error).lower()
+
+        if status_code == 400:
+            triggers = [
+                "context length",
+                "context_length",
+                "max tokens",
+                "maximum context",
+                "too many tokens",
+                "token limit",
+                "input too long",
+                "prompt is too long",
+            ]
+            return any(trigger in error_str for trigger in triggers)
+
+        return False
+
+    def _is_invalid_content_error(self, error: Exception) -> bool:
+        """
+        Detect if error is caused by invalid message content.
+
+        This helps identify when message content needs sanitization
+        or correction.
+
+        Returns:
+            True if error is related to invalid content
+        """
+        status_code = getattr(error, "status_code", None) or getattr(
+            error, "status", None
+        )
+        error_str = str(error).lower()
+
+        if status_code == 400:
+            triggers = [
+                "invalid content",
+                "content is required",
+                "content must be",
+                "invalid message",
+                "message content",
+                "empty content",
+            ]
+            return any(trigger in error_str for trigger in triggers)
+
+        return False
+
+    def _trim_conversation_for_context(
+        self, keep_system: bool = True, keep_last_n: int = 4
+    ) -> bool:
+        """
+        Trim conversation history to reduce context length.
+
+        Removes older messages while preserving:
+        - System message (if keep_system=True)
+        - Most recent messages (keep_last_n)
+        - Tool result messages that match recent tool_calls
+
+        Args:
+            keep_system: Whether to preserve the system message
+            keep_last_n: Number of recent messages to always keep
+
+        Returns:
+            True if messages were trimmed, False if no trimming possible
+        """
+        original_count = len(self.messages)
+
+        if original_count <= keep_last_n + (1 if keep_system else 0):
+            return False  # Nothing to trim
+
+        # Separate system message
+        system_msg = None
+        other_messages = []
+
+        for msg in self.messages:
+            if msg.get("role") == "system" and keep_system and system_msg is None:
+                system_msg = msg
+            else:
+                other_messages.append(msg)
+
+        if len(other_messages) <= keep_last_n:
+            return False  # Not enough to trim
+
+        # Keep only the last N messages
+        trimmed = other_messages[-keep_last_n:]
+
+        # Rebuild messages list
+        self.messages = []
+        if system_msg:
+            self.messages.append(system_msg)
+        self.messages.extend(trimmed)
+
+        logger.info(
+            f"Trimmed conversation from {original_count} to {len(self.messages)} messages "
+            f"to reduce context length"
+        )
+
+        return True
 
     def _log_waf_blocked_content(
         self, messages: List[Dict], context: str = ""
@@ -1070,6 +1218,119 @@ class LLM:
             self.response_format, BaseModel
         )
 
+    def _has_thinking_field(self, model: type) -> bool:
+        """Check if a Pydantic model already has a 'thinking' field."""
+        if not model or not issubclass(model, BaseModel):
+            return False
+        # Check if it's a subclass of ThinkingModel
+        if issubclass(model, ThinkingModel):
+            return True
+        # Check if it has a 'thinking' field defined
+        return "thinking" in model.model_fields
+
+    def _ensure_thinking_in_response_format(self) -> None:
+        """
+        Wrap response_format with a thinking field if it doesn't already have one.
+
+        This ensures Claude always provides chain-of-thought reasoning in structured output,
+        even when the user's model doesn't extend ThinkingModel.
+
+        If the model already has a thinking field, extended_thinking is disabled to avoid
+        redundancy (schema-based thinking takes precedence over native extended thinking).
+        """
+        if not self._original_response_format:
+            return
+
+        if self._has_thinking_field(self._original_response_format):
+            logger.debug(
+                f"Response format {self._original_response_format.__name__} "
+                "already has thinking field, no wrapping needed"
+            )
+            self._response_format_wrapped = False
+            self.response_format = self._original_response_format
+
+            # Disable extended_thinking to avoid redundancy - schema thinking takes precedence
+            if self.extended_thinking:
+                logger.info(
+                    f"Disabling extended_thinking because response_format "
+                    f"{self._original_response_format.__name__} already has thinking field. "
+                    "Schema-based thinking takes precedence over native extended thinking."
+                )
+                self.extended_thinking = None
+                self._thinking_auto_disabled = True
+            return
+
+        # Create a wrapper model with thinking as the first field
+        original_model = self._original_response_format
+        logger.info(
+            f"Wrapping response format {original_model.__name__} with thinking field"
+        )
+
+        # Dynamically create a new model with thinking + original fields
+        # We need to put 'thinking' first so Claude outputs it first
+        class ThinkingWrapper(ThinkingModel):
+            """Wrapper that adds thinking field to user's response format."""
+
+            response: original_model = Field(  # type: ignore
+                ...,
+                description=f"The actual response data following the {original_model.__name__} schema",
+            )
+
+            model_config = {"arbitrary_types_allowed": True}
+
+        # Give it a meaningful name for debugging
+        ThinkingWrapper.__name__ = f"ThinkingWrapped{original_model.__name__}"
+        ThinkingWrapper.__qualname__ = f"ThinkingWrapped{original_model.__name__}"
+
+        self.response_format = ThinkingWrapper
+        self._response_format_wrapped = True
+
+        # Also disable extended_thinking for wrapped models - the wrapper provides thinking
+        if self.extended_thinking:
+            logger.info(
+                "Disabling extended_thinking because response_format wrapper "
+                "already captures thinking. Schema-based thinking takes precedence."
+            )
+            self.extended_thinking = None
+            self._thinking_auto_disabled = True
+
+        logger.debug(f"Created wrapper model: {ThinkingWrapper.__name__}")
+
+    def _unwrap_thinking_response(self, parsed_response: BaseModel) -> BaseModel:
+        """
+        Unwrap a thinking-wrapped response to return the user's original model.
+
+        If the response was wrapped with thinking, extract just the 'response' field.
+        If not wrapped, return as-is.
+
+        Args:
+            parsed_response: The parsed Pydantic model instance
+
+        Returns:
+            The user's original model instance (unwrapped if necessary)
+        """
+        if not self._response_format_wrapped:
+            return parsed_response
+
+        # Extract the nested 'response' field which contains the user's model
+        if hasattr(parsed_response, "response"):
+            user_response = parsed_response.response
+            # Store thinking for potential access
+            if hasattr(parsed_response, "thinking"):
+                self._last_structured_thinking = parsed_response.thinking
+                logger.debug(
+                    f"Extracted thinking from structured response: "
+                    f"{parsed_response.thinking[:100]}..."
+                    if len(parsed_response.thinking) > 100
+                    else parsed_response.thinking
+                )
+            return user_response
+
+        logger.warning(
+            "Expected wrapped response but 'response' field not found, returning as-is"
+        )
+        return parsed_response
+
     # ========== Message Management ==========
 
     def add_message(self, role: str, content: str):
@@ -1140,13 +1401,141 @@ class LLM:
         return sanitized, True
 
     def reset(self):
-        """Reset conversation history and retry counter."""
+        """Reset conversation history, retry counter, and restore extended thinking.
+
+        This method also restores extended_thinking to its original setting if it was
+        auto-disabled due to tool call history. This allows thinking mode to work again
+        for new conversations.
+        """
         self.messages = []
         self.retry_count = 0
+
+        # Restore extended thinking to original setting if it was auto-disabled
+        if self._thinking_auto_disabled and self._original_extended_thinking:
+            self.extended_thinking = self._original_extended_thinking
+            self._thinking_auto_disabled = False
+            self._use_pseudo_thinking = False
+            logger.debug(
+                "Extended thinking restored to original setting after conversation reset"
+            )
+
         if self.system:
             self.add_message("system", self.system)
 
+    def _get_pseudo_thinking_instruction(self) -> str:
+        """
+        Get the instruction to make Claude use <think> tags for reasoning.
+
+        This is used when native extended_thinking is not available or was rejected.
+        The instruction asks Claude to start responses with a <think> block containing
+        its reasoning process.
+
+        Returns:
+            System instruction string for pseudo-thinking mode
+        """
+        return (
+            "IMPORTANT: Before responding, you MUST first think through your reasoning "
+            "step by step inside <think></think> tags. Start your response with the "
+            "<think> tag immediately (no text before it). Put your complete chain of "
+            "thought, analysis, and reasoning inside these tags. After closing </think>, "
+            "provide your final response to the user. The thinking section will be "
+            "processed separately and not shown to the user."
+        )
+
+    def _wants_thinking_mode(self) -> bool:
+        """
+        Check if the user originally requested thinking mode (native or pseudo).
+
+        Returns:
+            True if extended_thinking was originally configured
+        """
+        original = self._original_extended_thinking
+        if original is None:
+            return False
+
+        if isinstance(original, dict):
+            return original.get("enabled", False)
+
+        return bool(original)
+
+    def can_use_extended_thinking(self) -> bool:
+        """
+        Check if extended thinking can be used for the current conversation state.
+
+        Extended thinking is available when:
+        1. It was originally configured (either dict or bool)
+        2. Conversation has no tool call history OR is fresh (empty/system only)
+
+        This is useful for checking before making a request, or for
+        understanding why thinking was auto-disabled.
+
+        Returns:
+            True if extended thinking is available for the next request
+        """
+        # Check if thinking was ever configured
+        original = self._original_extended_thinking
+        if original is None:
+            return False
+
+        if isinstance(original, dict) and not original.get("enabled", False):
+            return False
+
+        if isinstance(original, bool) and not original:
+            return False
+
+        # Check if conversation state allows it
+        return not self._has_tool_call_history()
+
+    def restore_extended_thinking(self) -> bool:
+        """
+        Attempt to restore extended thinking to its original setting.
+
+        This is useful when you want to re-enable thinking after it was
+        auto-disabled due to tool call history. The method will only succeed
+        if the current conversation state allows it.
+
+        Returns:
+            True if thinking was restored, False if it cannot be restored
+            (either because it was never configured or conversation has tool history)
+        """
+        if self._original_extended_thinking is None:
+            logger.debug("Cannot restore extended_thinking: was never configured")
+            return False
+
+        if self._has_tool_call_history():
+            logger.debug(
+                "Cannot restore extended_thinking: conversation has tool call history. "
+                "Call reset() to start a fresh conversation."
+            )
+            return False
+
+        self.extended_thinking = self._original_extended_thinking
+        self._thinking_auto_disabled = False
+        logger.info("Extended thinking restored to original setting")
+        return True
+
     # ========== API Request Management ==========
+
+    def _has_tool_call_history(self) -> bool:
+        """
+        Check if conversation history contains assistant messages with tool_calls.
+
+        Extended thinking cannot be used when the conversation history already
+        contains tool calls, because Claude requires assistant messages to start
+        with thinking blocks when thinking is enabled. Our stored messages don't
+        have these blocks (we store plain text), so we must disable thinking.
+
+        Returns:
+            True if history contains assistant messages with tool_calls
+        """
+        for msg in self.messages:
+            if (
+                isinstance(msg, dict)
+                and msg.get("role") == "assistant"
+                and msg.get("tool_calls")
+            ):
+                return True
+        return False
 
     def get_request_params(self) -> Dict[str, Any]:
         """
@@ -1156,6 +1545,7 @@ class LLM:
 
         Note: Claude models don't allow both temperature and top_p simultaneously.
         Note: When extended_thinking is enabled, temperature must be set to 1.
+        Note: Extended thinking is auto-disabled if conversation has tool call history.
         """
         params = {
             "model": self.model,
@@ -1172,6 +1562,17 @@ class LLM:
             )
             or (isinstance(self.extended_thinking, bool) and self.extended_thinking)
         )
+
+        # Auto-disable extended thinking if conversation has tool call history
+        # Claude requires assistant messages to start with thinking blocks when
+        # thinking is enabled, but our stored messages are plain text
+        if has_extended_thinking and self._has_tool_call_history():
+            logger.info(
+                "Auto-disabling extended_thinking: conversation has tool call history. "
+                "Claude requires thinking blocks in assistant messages which we don't preserve."
+            )
+            has_extended_thinking = False
+            self._thinking_auto_disabled = True
 
         # Add temperature or top_p (not both for Claude)
         if has_extended_thinking:
@@ -1191,7 +1592,8 @@ class LLM:
         if self.top_k is not None:
             extra_body["top_k"] = self.top_k
 
-        if self.extended_thinking is not None:
+        # Only add extended_thinking if it should be enabled (not auto-disabled)
+        if has_extended_thinking and self.extended_thinking is not None:
             extra_body["extended_thinking"] = self.extended_thinking
 
         # Add extra_body if it has content
@@ -1599,15 +2001,41 @@ class LLM:
                     last_error = e
 
                     # Claude extended thinking validation failures (400) should retry without extended thinking
+                    # but enable pseudo-thinking (prompt-based) as a fallback
                     if (
                         not extended_thinking_disabled_for_retry
                         and self._should_disable_extended_thinking(e)
                     ):
                         extended_thinking_disabled_for_retry = True
                         self.extended_thinking = None
+                        self._thinking_auto_disabled = True
+                        self._use_pseudo_thinking = True
                         logger.warning(
-                            "Extended thinking was rejected by the API; retrying without extended_thinking."
+                            "Extended thinking was rejected by the API; "
+                            "switching to pseudo-thinking mode (prompt-based <think> tags)."
                         )
+                        continue
+
+                    # Check if it's a context length error - auto-recover by trimming history
+                    if self._is_context_length_error(e):
+                        if self._trim_conversation_for_context():
+                            logger.warning(
+                                "Context length exceeded. Trimmed conversation history and retrying."
+                            )
+                            continue
+                        else:
+                            logger.error(
+                                "Context length exceeded but cannot trim further. "
+                                "Consider using a shorter prompt or clearing history with reset()."
+                            )
+                            raise
+
+                    # Check if it's an invalid content error - sanitize and retry
+                    if self._is_invalid_content_error(e):
+                        logger.warning(
+                            "Invalid content error detected. Running sanitize_messages() and retrying."
+                        )
+                        self.sanitize_messages()
                         continue
 
                     # Check if it's a 408 timeout error - auto-recover by enabling streaming
@@ -1828,15 +2256,41 @@ class LLM:
                 last_error = e
 
                 # Claude extended thinking validation failures (400) should retry without extended thinking
+                # but enable pseudo-thinking (prompt-based) as a fallback
                 if (
                     not extended_thinking_disabled_for_retry
                     and self._should_disable_extended_thinking(e)
                 ):
                     extended_thinking_disabled_for_retry = True
                     self.extended_thinking = None
+                    self._thinking_auto_disabled = True
+                    self._use_pseudo_thinking = True
                     logger.warning(
-                        "Extended thinking was rejected by the API; retrying without extended_thinking (streaming)."
+                        "Extended thinking was rejected by the API; "
+                        "switching to pseudo-thinking mode (streaming)."
                     )
+                    continue
+
+                # Check if it's a context length error - auto-recover by trimming history
+                if self._is_context_length_error(e):
+                    if self._trim_conversation_for_context():
+                        logger.warning(
+                            "Context length exceeded (streaming). Trimmed conversation history and retrying."
+                        )
+                        continue
+                    else:
+                        logger.error(
+                            "Context length exceeded but cannot trim further (streaming)."
+                        )
+                        self.extended_thinking = original_extended_thinking
+                        raise
+
+                # Check if it's an invalid content error - sanitize and retry
+                if self._is_invalid_content_error(e):
+                    logger.warning(
+                        "Invalid content error detected (streaming). Running sanitize_messages() and retrying."
+                    )
+                    self.sanitize_messages()
                     continue
 
                 # Check if it's a CloudFront 403 error
@@ -2024,7 +2478,8 @@ class LLM:
             logger.info(f"Original message: {message}")
             json_message = lm_json_utils.extract_strict_json(message)
             logger.info(f"Parsed message: {json_message}")
-            return self.response_format.model_validate_json(json_message)
+            parsed = self.response_format.model_validate_json(json_message)
+            return self._unwrap_thinking_response(parsed)
 
         return response.choices[0].message.content
 
@@ -2118,7 +2573,8 @@ class LLM:
                 )
                 # Return empty model with defaults rather than failing
                 try:
-                    return self.response_format()
+                    default_model = self.response_format()
+                    return self._unwrap_thinking_response(default_model)
                 except Exception as e:
                     logger.error(f"Failed to create default model: {e}")
                     raise ValueError(
@@ -2126,7 +2582,8 @@ class LLM:
                         f"Raw response: {message[:200]}..."
                     )
 
-            return self.response_format.model_validate_json(json_message)
+            parsed = self.response_format.model_validate_json(json_message)
+            return self._unwrap_thinking_response(parsed)
 
         return message
 
@@ -2413,6 +2870,28 @@ class LLM:
                 stream = self.client.chat.completions.create(
                     **params, messages=validated_messages
                 )
+            except BadRequestError as e:
+                # Handle 400 Extended Thinking validation error
+                if self._should_disable_extended_thinking(e):
+                    logger.warning(
+                        "Extended thinking validation error in streaming after tool execution. "
+                        "Switching to pseudo-thinking mode."
+                    )
+                    # Disable native extended thinking and enable pseudo-thinking
+                    self.extended_thinking = None
+                    self._thinking_auto_disabled = True
+                    self._use_pseudo_thinking = True
+
+                    # Get new params without extended_thinking
+                    # Note: pseudo-thinking instruction will be injected in _validate_messages_for_api
+                    retry_params = self.get_request_params()
+                    retry_params["stream"] = True
+                    validated_messages = self._validate_messages_for_api(self.messages)
+                    stream = self.client.chat.completions.create(
+                        **retry_params, messages=validated_messages
+                    )
+                else:
+                    raise
             except PermissionDeniedError as e:
                 context = "_handle_tool_calls streaming"
                 if self._is_cloudfront_403(e):
@@ -2736,6 +3215,40 @@ class LLM:
                         # No tool messages found to simplify, re-raise
                         raise e
 
+                # Handle 400 Extended Thinking validation error
+                elif e.status_code == 400 and self._should_disable_extended_thinking(e):
+                    logger.warning(
+                        "Extended thinking validation error after tool execution. "
+                        "Switching to pseudo-thinking mode."
+                    )
+                    # Disable native extended thinking and enable pseudo-thinking
+                    original_extended_thinking = self.extended_thinking
+                    self.extended_thinking = None
+                    self._thinking_auto_disabled = True
+                    self._use_pseudo_thinking = True
+
+                    try:
+                        # Get new params without extended_thinking
+                        # Note: pseudo-thinking instruction will be injected in _validate_messages_for_api
+                        retry_params = self.get_request_params()
+                        validated_messages = self._validate_messages_for_api(
+                            self.messages
+                        )
+                        follow_up_response = self.retry_handler.execute_with_retry(
+                            self.client.chat.completions.create,
+                            **retry_params,
+                            messages=validated_messages,
+                        )
+                    except Exception as retry_error:
+                        # Restore extended thinking before re-raising
+                        self.extended_thinking = original_extended_thinking
+                        self._use_pseudo_thinking = False
+                        raise retry_error
+
+                    # Note: We intentionally don't restore extended_thinking here
+                    # because subsequent calls in this conversation will also fail
+                    # if we try to use it with the existing message history
+
                 # Handle 403 CloudFront WAF Error
                 elif e.status_code == 403:
                     context = "_handle_tool_calls non-streaming"
@@ -2840,6 +3353,8 @@ class LLM:
         """
         Validate and sanitize messages for API.
 
+        Also injects pseudo-thinking instructions when in pseudo-thinking mode.
+
         Args:
             messages: List of conversation messages
 
@@ -2847,6 +3362,14 @@ class LLM:
             Validated messages
         """
         validated_messages = []
+
+        # If pseudo-thinking mode is enabled, inject instruction into system message
+        pseudo_thinking_injected = False
+        pseudo_instruction = (
+            self._get_pseudo_thinking_instruction()
+            if self._use_pseudo_thinking
+            else None
+        )
 
         for i, msg in enumerate(messages):
             if not isinstance(msg, dict):
@@ -2882,7 +3405,14 @@ class LLM:
                 existing_content = validated_msg.get("content")
                 if existing_content and str(existing_content).strip():
                     # Preserve the LLM's response text (e.g., "I'll help you with that")
-                    validated_msg["content"] = str(existing_content)
+                    # ALWAYS strip <think> tags - Heroku API causes 500 if they're in history
+                    clean_content = re.sub(
+                        r"<think>.*?</think>",
+                        "",
+                        str(existing_content),
+                        flags=re.DOTALL,
+                    ).strip()
+                    validated_msg["content"] = clean_content if clean_content else "."
                 else:
                     # No content - use minimal placeholder (some APIs require non-empty content)
                     # Using period as it's more universally accepted than space
@@ -2911,8 +3441,26 @@ class LLM:
                 )
                 validated_msg["content"] = "Message content conversion failed"
 
-            # Apply role-specific fixes
+            # ALWAYS strip <think> tags from assistant messages
+            # Heroku's OpenAI-compatible API returns 500 if thinking tags are in history
             role = validated_msg["role"].lower()
+            if role == "assistant":
+                validated_msg["content"] = re.sub(
+                    r"<think>.*?</think>",
+                    "",
+                    validated_msg["content"],
+                    flags=re.DOTALL,
+                ).strip()
+
+            # Inject pseudo-thinking instruction into system message (once)
+            if role == "system" and pseudo_instruction and not pseudo_thinking_injected:
+                validated_msg["content"] = (
+                    f"{validated_msg['content']}\n\n{pseudo_instruction}"
+                )
+                pseudo_thinking_injected = True
+                logger.debug("Injected pseudo-thinking instruction into system message")
+
+            # Apply role-specific fixes
             content = validated_msg["content"].strip()
 
             if not content:
@@ -2957,6 +3505,17 @@ class LLM:
                     )
 
             validated_messages.append(validated_msg)
+
+        # If pseudo-thinking was requested but no system message existed, prepend one
+        if pseudo_instruction and not pseudo_thinking_injected:
+            validated_messages.insert(
+                0,
+                {
+                    "role": "system",
+                    "content": pseudo_instruction,
+                },
+            )
+            logger.debug("Added system message with pseudo-thinking instruction")
 
         return validated_messages
 

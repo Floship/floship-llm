@@ -7,7 +7,7 @@ import pytest
 from pydantic import BaseModel
 
 from floship_llm.client import LLM
-from floship_llm.schemas import ToolFunction, ToolParameter
+from floship_llm.schemas import ThinkingModel, ToolFunction, ToolParameter
 
 
 def create_mock_stream_response(content: str):
@@ -37,6 +37,13 @@ class ResponseModelForTesting(BaseModel):
 
     name: str
     value: int
+
+
+class ThinkingResponseModelForTesting(ThinkingModel):
+    """Test pydantic model that already extends ThinkingModel."""
+
+    answer: str
+    confidence: int
 
 
 class TestLLM:
@@ -123,7 +130,9 @@ class TestLLM:
             assert llm.input_tokens_limit == 20000
             assert llm.max_retry == 5
             assert llm.retry_count == 0
-            assert llm.response_format == ResponseModelForTesting
+            # response_format is wrapped, but _original_response_format preserves user's model
+            assert llm._original_response_format == ResponseModelForTesting
+            assert llm._response_format_wrapped is True
             # System message should be added to messages
             assert len(llm.messages) == 1
             assert llm.messages[0]["role"] == "system"
@@ -330,6 +339,200 @@ class TestLLM:
             }
             assert params == expected
 
+    def test_get_request_params_auto_disables_thinking_with_tool_history(self):
+        """Test that extended_thinking is auto-disabled when conversation has tool call history.
+
+        Claude requires assistant messages to start with thinking blocks when
+        thinking is enabled. Since we store messages as plain text (stripping
+        thinking blocks), we must auto-disable thinking for follow-up requests
+        after tool execution to avoid 400 errors.
+        """
+        with patch("floship_llm.client.OpenAI"):
+            extended_thinking_config = {
+                "enabled": True,
+                "budget_tokens": 1024,
+            }
+            llm = LLM(extended_thinking=extended_thinking_config)
+
+            # Add a conversation history with tool calls (simulating post-tool state)
+            llm.messages = [
+                {"role": "system", "content": "You are helpful"},
+                {"role": "user", "content": "Do something"},
+                {
+                    "role": "assistant",
+                    "content": "I'll help with that",
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {"name": "some_tool", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_123", "content": "Tool result"},
+            ]
+
+            params = llm.get_request_params()
+
+            # extended_thinking should NOT be in params (auto-disabled)
+            assert "extra_body" not in params or "extended_thinking" not in params.get(
+                "extra_body", {}
+            )
+            # Temperature should NOT be 1.0 (default behavior)
+            assert params.get("temperature") == 0.15  # Default temperature
+
+    def test_get_request_params_keeps_thinking_without_tool_history(self):
+        """Test that extended_thinking stays enabled when no tool calls in history."""
+        with patch("floship_llm.client.OpenAI"):
+            extended_thinking_config = {
+                "enabled": True,
+                "budget_tokens": 1024,
+            }
+            llm = LLM(extended_thinking=extended_thinking_config)
+
+            # Add conversation history WITHOUT tool calls
+            llm.messages = [
+                {"role": "system", "content": "You are helpful"},
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi there!"},
+                {"role": "user", "content": "How are you?"},
+            ]
+
+            params = llm.get_request_params()
+
+            # extended_thinking should still be enabled
+            assert "extra_body" in params
+            assert "extended_thinking" in params["extra_body"]
+            assert params["extra_body"]["extended_thinking"] == extended_thinking_config
+            # Temperature should be 1.0 for extended thinking
+            assert params.get("temperature") == 1.0
+
+    def test_reset_restores_extended_thinking_if_auto_disabled(self):
+        """Test that reset() restores extended_thinking when it was auto-disabled."""
+        with patch("floship_llm.client.OpenAI"):
+            extended_thinking_config = {
+                "enabled": True,
+                "budget_tokens": 1024,
+            }
+            llm = LLM(extended_thinking=extended_thinking_config)
+
+            # Add tool call history to trigger auto-disable
+            llm.messages = [
+                {"role": "user", "content": "Do something"},
+                {
+                    "role": "assistant",
+                    "content": ".",
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {"name": "test_tool", "arguments": "{}"},
+                        }
+                    ],
+                },
+            ]
+
+            # Get params - this should auto-disable thinking
+            params = llm.get_request_params()
+            assert "extended_thinking" not in params.get("extra_body", {})
+            assert llm._thinking_auto_disabled is True
+
+            # Reset should restore thinking
+            llm.reset()
+
+            assert llm._thinking_auto_disabled is False
+            assert llm.extended_thinking == extended_thinking_config
+
+            # Params should have thinking enabled again
+            params = llm.get_request_params()
+            assert "extra_body" in params
+            assert params["extra_body"]["extended_thinking"] == extended_thinking_config
+
+    def test_can_use_extended_thinking_fresh_conversation(self):
+        """Test can_use_extended_thinking returns True for fresh conversation."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(extended_thinking={"enabled": True, "budget_tokens": 1024})
+
+            # Fresh conversation - should be True
+            assert llm.can_use_extended_thinking() is True
+
+    def test_can_use_extended_thinking_after_tool_calls(self):
+        """Test can_use_extended_thinking returns False after tool execution."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(extended_thinking={"enabled": True, "budget_tokens": 1024})
+
+            # Add tool call history
+            llm.messages = [
+                {"role": "user", "content": "Do something"},
+                {
+                    "role": "assistant",
+                    "content": ".",
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {"name": "test", "arguments": "{}"},
+                        }
+                    ],
+                },
+            ]
+
+            # After tool calls - should be False
+            assert llm.can_use_extended_thinking() is False
+
+    def test_can_use_extended_thinking_not_configured(self):
+        """Test can_use_extended_thinking returns False when not configured."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()  # No extended_thinking
+
+            assert llm.can_use_extended_thinking() is False
+
+    def test_restore_extended_thinking_success(self):
+        """Test restore_extended_thinking succeeds on fresh conversation."""
+        with patch("floship_llm.client.OpenAI"):
+            config = {"enabled": True, "budget_tokens": 1024}
+            llm = LLM(extended_thinking=config)
+
+            # Manually disable thinking
+            llm.extended_thinking = None
+            llm._thinking_auto_disabled = True
+
+            # Should be able to restore (no tool history)
+            result = llm.restore_extended_thinking()
+
+            assert result is True
+            assert llm.extended_thinking == config
+            assert llm._thinking_auto_disabled is False
+
+    def test_restore_extended_thinking_fails_with_tool_history(self):
+        """Test restore_extended_thinking fails when tool history exists."""
+        with patch("floship_llm.client.OpenAI"):
+            config = {"enabled": True, "budget_tokens": 1024}
+            llm = LLM(extended_thinking=config)
+
+            # Add tool call history
+            llm.messages = [
+                {
+                    "role": "assistant",
+                    "content": ".",
+                    "tool_calls": [
+                        {
+                            "id": "call_123",
+                            "type": "function",
+                            "function": {"name": "test", "arguments": "{}"},
+                        }
+                    ],
+                },
+            ]
+            llm.extended_thinking = None
+            llm._thinking_auto_disabled = True
+
+            # Should fail to restore (tool history present)
+            result = llm.restore_extended_thinking()
+
+            assert result is False
+            assert llm.extended_thinking is None
+
     def test_get_request_params_with_allow_ignored_params(self):
         """Test request parameters with deprecated params when allow_ignored_params=True."""
         with patch("floship_llm.client.OpenAI"):
@@ -460,17 +663,18 @@ class TestLLM:
             assert len(llm.messages) == 0  # Should be reset
 
     def test_prompt_with_response_format(self):
-        """Test prompt with response format (structured output with streaming)."""
+        """Test prompt with response format returns user's original model type."""
         with patch("floship_llm.client.OpenAI") as mock_openai:
-            # Create mock streaming response with JSON content
+            # Create mock streaming response with wrapped JSON content (thinking + response)
+            wrapped_response = '{"thinking": "Let me create a test record.", "response": {"name": "test", "value": 42}}'
             mock_openai.return_value.chat.completions.create.return_value = (
-                create_mock_stream_response('{"name": "test", "value": 42}')
+                create_mock_stream_response(wrapped_response)
             )
 
             with patch(
                 "floship_llm.utils.lm_json_utils.extract_strict_json"
             ) as mock_extract:
-                mock_extract.return_value = '{"name": "test", "value": 42}'
+                mock_extract.return_value = wrapped_response
 
                 llm = LLM(response_format=ResponseModelForTesting)
                 # Clear system message added during init
@@ -478,9 +682,14 @@ class TestLLM:
 
                 result = llm.prompt("Hello")
 
+                # User gets back their original model type (unwrapped)
                 assert isinstance(result, ResponseModelForTesting)
                 assert result.name == "test"
                 assert result.value == 42
+                # Thinking should be captured
+                assert (
+                    llm.get_last_structured_thinking() == "Let me create a test record."
+                )
 
     def test_retry_prompt(self):
         """Test retry prompt functionality."""
@@ -656,6 +865,54 @@ class TestLLM:
             # Raw response should still have thinking tags
             assert "<think>" in llm.get_last_raw_response()
 
+    def test_validate_messages_strips_thinking_tags_defensively(self):
+        """Test that _validate_messages_for_api strips thinking tags as a defensive measure.
+
+        Even if thinking tags somehow end up in message history (edge cases, legacy data),
+        the validation pass should strip them before sending to the API.
+        """
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(continuous=True)
+
+            # Simulate messages with thinking tags that somehow got into history
+            # (this shouldn't happen with our fixes, but we want defensive stripping)
+            llm.messages = [
+                {"role": "system", "content": "You are helpful"},
+                {"role": "user", "content": "Hello"},
+                {
+                    "role": "assistant",
+                    "content": "<think>I'm thinking...</think>Hello! How can I help?",
+                },
+                {"role": "user", "content": "What's 2+2?"},
+                {
+                    "role": "assistant",
+                    "content": "<think>Let me calculate...</think>The answer is 4",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "calculator", "arguments": "{}"},
+                        }
+                    ],
+                },
+            ]
+
+            # Validate messages
+            validated = llm._validate_messages_for_api(llm.messages)
+
+            # All assistant messages should have thinking tags stripped
+            for msg in validated:
+                if msg["role"] == "assistant":
+                    assert "<think>" not in msg["content"], (
+                        f"Thinking tags not stripped from: {msg['content']}"
+                    )
+                    assert "</think>" not in msg["content"]
+
+            # Verify specific content
+            assert validated[2]["content"] == "Hello! How can I help?"
+            # Tool call message - either "The answer is 4" or "." (placeholder if empty after stripping)
+            assert validated[4]["content"] in ["The answer is 4", "."]
+
     def test_extended_thinking_disabled_strips_thinking_tags_from_history(self):
         """Test that without extended thinking, thinking tags are still stripped from history."""
         with patch("floship_llm.client.OpenAI"):
@@ -675,6 +932,82 @@ class TestLLM:
             assert llm.messages[-1]["content"] == "Final response"
             # Raw response should still have thinking tags
             assert "<think>" in llm.get_last_raw_response()
+
+    def test_handle_tool_calls_disables_extended_thinking_on_400(self):
+        """Test that _handle_tool_calls retries without extended_thinking on 400 validation error.
+
+        When extended_thinking is enabled and a follow-up request after tool execution
+        fails with a 400 error about thinking blocks, the code should automatically
+        disable extended_thinking and retry.
+        """
+        from openai import BadRequestError
+
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(
+                extended_thinking={"enabled": True, "budget_tokens": 1024},
+                enable_tools=True,
+                continuous=True,
+            )
+
+            # Create mock message with tool calls
+            mock_message = Mock()
+            mock_message.content = "Let me help"
+            mock_tool_call = Mock()
+            mock_tool_call.id = "call_123"
+            mock_tool_call.function.name = "test_tool"
+            mock_tool_call.function.arguments = "{}"
+            mock_message.tool_calls = [mock_tool_call]
+
+            mock_response = Mock()
+            mock_response.choices = [Mock(message=mock_message)]
+
+            # Mock tool execution
+            with patch.object(llm.tool_manager, "execute_tool") as mock_exec:
+                mock_result = Mock()
+                mock_result.content = "Tool result"
+                mock_exec.return_value = mock_result
+
+                # Mock the 400 error that Claude returns when thinking is enabled
+                # but message history doesn't have proper thinking blocks
+                error_response = Mock()
+                error_response.status_code = 400
+                error_400 = BadRequestError(
+                    message=(
+                        "Error code: 400 - messages.1.content.0.type: Expected `thinking` or "
+                        "`redacted_thinking`, but found `text`. When `thinking` is enabled..."
+                    ),
+                    response=error_response,
+                    body=None,
+                )
+
+                # First call raises 400, second call (retry) succeeds
+                mock_final_choice = Mock()
+                mock_final_choice.message.content = "Here is the result"
+                mock_final_choice.message.tool_calls = None
+                mock_final_response = Mock()
+                mock_final_response.choices = [mock_final_choice]
+
+                call_count = [0]
+
+                def mock_api_call(*args, **kwargs):
+                    call_count[0] += 1
+                    if call_count[0] == 1:
+                        raise error_400
+                    return mock_final_response
+
+                with patch.object(
+                    llm.retry_handler, "execute_with_retry", side_effect=mock_api_call
+                ):
+                    result = llm._handle_tool_calls(mock_message, mock_response)
+
+                # Should have made 2 calls (first failed, second succeeded)
+                assert call_count[0] == 2
+
+                # extended_thinking should now be disabled
+                assert llm.extended_thinking is None
+
+                # Should have gotten a response
+                assert result is not None
 
     def test_on_assistant_message_callback_with_tool_calls(self):
         """Test on_assistant_message callback is called with tool calls."""
@@ -826,22 +1159,24 @@ class TestLLM:
                 assert result == "This is a very long response that exceeds the limit"
 
     def test_process_response_with_json_format(self):
-        """Test response processing with JSON response format."""
+        """Test response processing with JSON response format returns user's model."""
         with patch("floship_llm.client.OpenAI"):
             llm = LLM(response_format=ResponseModelForTesting)
 
             mock_choice = Mock()
-            mock_choice.message.content = 'Response: {"name": "test", "value": 42}'
+            # Mock response contains wrapped format
+            mock_choice.message.content = 'Response: {"thinking": "Processing request.", "response": {"name": "test", "value": 42}}'
             mock_response = Mock()
             mock_response.choices = [mock_choice]
 
             with patch(
                 "floship_llm.utils.lm_json_utils.extract_strict_json"
             ) as mock_extract:
-                mock_extract.return_value = '{"name": "test", "value": 42}'
+                mock_extract.return_value = '{"thinking": "Processing request.", "response": {"name": "test", "value": 42}}'
 
                 result = llm.process_response(mock_response)
 
+                # User gets back their original model type (unwrapped)
                 assert isinstance(result, ResponseModelForTesting)
                 assert result.name == "test"
                 assert result.value == 42
@@ -1368,22 +1703,26 @@ class TestLLM:
         """Test chat with structured response format (Pydantic model)."""
         with patch("floship_llm.client.OpenAI") as mock_openai:
             mock_client = mock_openai.return_value
-            # Streaming returns JSON response
+            # Streaming returns wrapped JSON response
+            wrapped_response = '{"thinking": "Generating test record.", "response": {"name": "Alice", "value": 100}}'
             mock_client.chat.completions.create.return_value = (
-                create_mock_stream_response('{"name": "Alice", "value": 100}')
+                create_mock_stream_response(wrapped_response)
             )
 
             with patch(
                 "floship_llm.utils.lm_json_utils.extract_strict_json"
             ) as mock_extract:
-                mock_extract.return_value = '{"name": "Alice", "value": 100}'
+                mock_extract.return_value = wrapped_response
 
-                llm = LLM(response_format=ResponseModelForTesting, continuous=False)
+                llm = LLM(
+                    response_format=ResponseModelForTesting,
+                    continuous=False,
+                )
                 llm.messages = []  # Clear system message added during init
 
                 result = llm.chat("Generate a test record")
 
-                # Result should be parsed as Pydantic model
+                # Result should be user's original model type (unwrapped)
                 assert isinstance(result, ResponseModelForTesting)
                 assert result.name == "Alice"
                 assert result.value == 100
@@ -1567,6 +1906,146 @@ class TestLLMEdgeCases:
         assert error.original_error == original
 
 
+class TestErrorDetection:
+    """Test error detection methods for auto-recovery."""
+
+    def setup_method(self):
+        """Set up test environment variables."""
+        self.env_vars = {
+            "INFERENCE_URL": "https://test-api.example.com",
+            "INFERENCE_MODEL_ID": "test-model",
+            "INFERENCE_KEY": "test-key",
+        }
+        self.env_patcher = patch.dict(os.environ, self.env_vars, clear=False)
+        self.env_patcher.start()
+
+    def teardown_method(self):
+        """Clean up test environment."""
+        self.env_patcher.stop()
+
+    def test_is_context_length_error_true(self):
+        """Test context length error detection returns True for relevant errors."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+
+            # Create actual exception classes for testing
+            class MockError1(Exception):
+                status_code = 400
+
+                def __str__(self):
+                    return "Error: context length exceeded maximum allowed"
+
+            class MockError2(Exception):
+                status_code = 400
+
+                def __str__(self):
+                    return "Error: too many tokens in request"
+
+            class MockError3(Exception):
+                status_code = 400
+
+                def __str__(self):
+                    return "Error: prompt is too long"
+
+            assert llm._is_context_length_error(MockError1()) is True
+            assert llm._is_context_length_error(MockError2()) is True
+            assert llm._is_context_length_error(MockError3()) is True
+
+    def test_is_context_length_error_false(self):
+        """Test context length error detection returns False for other errors."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+
+            # Not a 400 error
+            class MockError500(Exception):
+                status_code = 500
+
+                def __str__(self):
+                    return "Internal server error"
+
+            assert llm._is_context_length_error(MockError500()) is False
+
+            # 400 but different message
+            class MockError400Other(Exception):
+                status_code = 400
+
+                def __str__(self):
+                    return "Invalid parameter value"
+
+            assert llm._is_context_length_error(MockError400Other()) is False
+
+    def test_is_invalid_content_error_true(self):
+        """Test invalid content error detection returns True for relevant errors."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+
+            class MockError1(Exception):
+                status_code = 400
+
+                def __str__(self):
+                    return "Error: content is required"
+
+            class MockError2(Exception):
+                status_code = 400
+
+                def __str__(self):
+                    return "Error: invalid message content"
+
+            assert llm._is_invalid_content_error(MockError1()) is True
+            assert llm._is_invalid_content_error(MockError2()) is True
+
+    def test_is_invalid_content_error_false(self):
+        """Test invalid content error detection returns False for other errors."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+
+            class MockError(Exception):
+                status_code = 400
+
+                def __str__(self):
+                    return "Error: rate limit exceeded"
+
+            assert llm._is_invalid_content_error(MockError()) is False
+
+    def test_trim_conversation_for_context(self):
+        """Test conversation trimming keeps system and recent messages."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+
+            llm.messages = [
+                {"role": "system", "content": "You are helpful"},
+                {"role": "user", "content": "Message 1"},
+                {"role": "assistant", "content": "Response 1"},
+                {"role": "user", "content": "Message 2"},
+                {"role": "assistant", "content": "Response 2"},
+                {"role": "user", "content": "Message 3"},
+                {"role": "assistant", "content": "Response 3"},
+                {"role": "user", "content": "Message 4"},
+            ]
+
+            result = llm._trim_conversation_for_context(keep_system=True, keep_last_n=4)
+
+            assert result is True
+            assert len(llm.messages) == 5  # system + 4 recent
+            assert llm.messages[0]["role"] == "system"
+            assert llm.messages[-1]["content"] == "Message 4"
+
+    def test_trim_conversation_for_context_nothing_to_trim(self):
+        """Test trimming returns False when nothing can be trimmed."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+
+            llm.messages = [
+                {"role": "system", "content": "System"},
+                {"role": "user", "content": "Hello"},
+            ]
+
+            result = llm._trim_conversation_for_context(keep_system=True, keep_last_n=4)
+
+            assert result is False
+            assert len(llm.messages) == 2
+
+
 class TestToolNameSanitization:
     """Test tool name sanitization."""
 
@@ -1601,3 +2080,204 @@ class TestToolNameSanitization:
             name, changed = llm._sanitize_tool_name_for_api(None)
             assert name.startswith("tool_")
             assert changed is True
+
+
+class TestResponseFormatThinkingWrapper:
+    """Test cases for response_format thinking auto-wrapping."""
+
+    def setup_method(self):
+        """Set up test environment variables."""
+        self.env_vars = {
+            "INFERENCE_URL": "https://test-api.example.com",
+            "INFERENCE_MODEL_ID": "test-model",
+            "INFERENCE_KEY": "test-key",
+        }
+        self.env_patcher = patch.dict(os.environ, self.env_vars, clear=False)
+        self.env_patcher.start()
+
+    def teardown_method(self):
+        """Clean up test environment."""
+        self.env_patcher.stop()
+
+    def test_response_format_auto_wrapped_for_plain_model(self):
+        """Test that plain BaseModel response_format is auto-wrapped with thinking."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(response_format=ResponseModelForTesting)
+
+            # Should be wrapped
+            assert llm._response_format_wrapped is True
+            assert llm._original_response_format == ResponseModelForTesting
+            # Wrapper should have thinking and response fields
+            assert "thinking" in llm.response_format.model_fields
+            assert "response" in llm.response_format.model_fields
+
+    def test_response_format_not_wrapped_for_thinking_model(self):
+        """Test that ThinkingModel subclass is NOT wrapped."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(response_format=ThinkingResponseModelForTesting)
+
+            # Should NOT be wrapped
+            assert llm._response_format_wrapped is False
+            assert llm._original_response_format == ThinkingResponseModelForTesting
+            assert llm.response_format == ThinkingResponseModelForTesting
+
+    def test_has_thinking_field_detection(self):
+        """Test _has_thinking_field correctly detects thinking field."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+
+            # ThinkingModel subclass has thinking field
+            assert llm._has_thinking_field(ThinkingResponseModelForTesting) is True
+
+            # Plain BaseModel does not
+            assert llm._has_thinking_field(ResponseModelForTesting) is False
+
+            # None/invalid returns False
+            assert llm._has_thinking_field(None) is False
+
+    def test_unwrap_thinking_response_extracts_user_model(self):
+        """Test _unwrap_thinking_response returns user's original model type."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(response_format=ResponseModelForTesting)
+
+            # Create a mock wrapped response
+            wrapped = llm.response_format(
+                thinking="My reasoning here",
+                response=ResponseModelForTesting(name="test", value=42),
+            )
+
+            result = llm._unwrap_thinking_response(wrapped)
+
+            # Should return the user's original model type
+            assert isinstance(result, ResponseModelForTesting)
+            assert result.name == "test"
+            assert result.value == 42
+            # Thinking should be stored
+            assert llm._last_structured_thinking == "My reasoning here"
+
+    def test_unwrap_thinking_response_returns_as_is_for_thinking_model(self):
+        """Test _unwrap_thinking_response returns ThinkingModel as-is."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(response_format=ThinkingResponseModelForTesting)
+
+            response = ThinkingResponseModelForTesting(
+                thinking="My reasoning", answer="Paris", confidence=100
+            )
+
+            result = llm._unwrap_thinking_response(response)
+
+            # Should return the same object
+            assert result is response
+            assert isinstance(result, ThinkingResponseModelForTesting)
+
+    def test_get_last_structured_thinking_returns_captured_thinking(self):
+        """Test get_last_structured_thinking returns thinking from wrapped response."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(response_format=ResponseModelForTesting)
+
+            # Manually set thinking (normally done during unwrap)
+            llm._last_structured_thinking = "Test thinking content"
+
+            assert llm.get_last_structured_thinking() == "Test thinking content"
+
+    def test_get_last_structured_thinking_none_initially(self):
+        """Test get_last_structured_thinking returns None before any response."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(response_format=ResponseModelForTesting)
+
+            assert llm.get_last_structured_thinking() is None
+
+    def test_wrapper_schema_has_correct_structure(self):
+        """Test that the wrapper schema has thinking first, then response."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(response_format=ResponseModelForTesting)
+
+            schema = llm.response_format.model_json_schema()
+
+            # Should have both required fields
+            assert "thinking" in schema["required"]
+            assert "response" in schema["required"]
+            # Should have properties
+            assert "thinking" in schema["properties"]
+            assert "response" in schema["properties"]
+
+    def test_prompt_with_thinking_model_returns_thinking_in_model(self):
+        """Test prompt with ThinkingModel returns model with thinking field populated."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            # ThinkingModel response is NOT wrapped, so mock direct response
+            response_json = '{"thinking": "Capital cities are well-known facts.", "answer": "Paris", "confidence": 100}'
+            mock_openai.return_value.chat.completions.create.return_value = (
+                create_mock_stream_response(response_json)
+            )
+
+            with patch(
+                "floship_llm.utils.lm_json_utils.extract_strict_json"
+            ) as mock_extract:
+                mock_extract.return_value = response_json
+
+                llm = LLM(response_format=ThinkingResponseModelForTesting)
+                llm.messages = []
+
+                result = llm.prompt("What is the capital of France?")
+
+                # Should return ThinkingModel with thinking populated
+                assert isinstance(result, ThinkingResponseModelForTesting)
+                assert result.thinking == "Capital cities are well-known facts."
+                assert result.answer == "Paris"
+                assert result.confidence == 100
+                # get_last_structured_thinking should be None (not wrapped)
+                assert llm.get_last_structured_thinking() is None
+
+    def test_extended_thinking_disabled_when_thinking_model_used(self):
+        """Test extended_thinking is auto-disabled when ThinkingModel is used."""
+        with patch("floship_llm.client.OpenAI"):
+            # User enables both extended_thinking and ThinkingModel response_format
+            llm = LLM(
+                response_format=ThinkingResponseModelForTesting,
+                extended_thinking={"enabled": True, "budget_tokens": 1024},
+            )
+
+            # Extended thinking should be disabled (schema thinking takes precedence)
+            assert llm.extended_thinking is None
+            assert llm._thinking_auto_disabled is True
+            # Original should be preserved
+            assert llm._original_extended_thinking == {
+                "enabled": True,
+                "budget_tokens": 1024,
+            }
+
+    def test_extended_thinking_disabled_when_wrapped_response_format_used(self):
+        """Test extended_thinking is auto-disabled when response_format is wrapped."""
+        with patch("floship_llm.client.OpenAI"):
+            # User enables extended_thinking with plain model (will be wrapped)
+            llm = LLM(
+                response_format=ResponseModelForTesting,
+                extended_thinking={"enabled": True, "budget_tokens": 1024},
+            )
+
+            # Extended thinking should be disabled (wrapper provides thinking)
+            assert llm.extended_thinking is None
+            assert llm._thinking_auto_disabled is True
+            # Wrapper should be used
+            assert llm._response_format_wrapped is True
+
+    def test_no_redundant_thinking_with_response_format(self):
+        """Test that we never have both extended_thinking and schema thinking active."""
+        with patch("floship_llm.client.OpenAI"):
+            # Case 1: ThinkingModel with extended_thinking
+            llm1 = LLM(
+                response_format=ThinkingResponseModelForTesting,
+                extended_thinking={"enabled": True, "budget_tokens": 1024},
+            )
+            assert llm1.extended_thinking is None
+
+            # Case 2: Plain model (wrapped) with extended_thinking
+            llm2 = LLM(
+                response_format=ResponseModelForTesting,
+                extended_thinking={"enabled": True, "budget_tokens": 1024},
+            )
+            assert llm2.extended_thinking is None
+
+            # Case 3: No response_format - extended_thinking should remain
+            llm3 = LLM(extended_thinking={"enabled": True, "budget_tokens": 1024})
+            assert llm3.extended_thinking == {"enabled": True, "budget_tokens": 1024}

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.41] - 2025-12-07
+
+### Added
+- **Response Format Thinking Auto-Wrap:** When using `response_format` with a Pydantic model that doesn't have a `thinking` field, the library now automatically wraps it to capture Claude's chain-of-thought reasoning. Access the reasoning via `get_last_structured_thinking()`. Models extending `ThinkingModel` are returned as-is.
+- **`get_last_structured_thinking()` Method:** New method to retrieve the thinking/reasoning from the last structured response when using auto-wrapped response formats.
+- **Pseudo-Thinking Mode:** When native `extended_thinking` fails (e.g., after tool execution), the library automatically switches to prompt-based pseudo-thinking using `<think>` tags.
+
+### Changed
+- **Thinking Redundancy Prevention:** When `response_format` already has a `thinking` field (either extending `ThinkingModel` or having the field directly), native `extended_thinking` is automatically disabled to avoid redundant thinking mechanisms. Schema-based thinking takes precedence.
+- **Always Strip Thinking Tags:** Thinking tags (`<think>...</think>`) are now always stripped from message history before API calls, preventing 500 errors from Heroku's API.
+
+### Fixed
+- **Extended Thinking Recovery:** Added automatic recovery when extended thinking validation fails after tool execution - switches to pseudo-thinking mode seamlessly.
+- **Context Length Handling:** Added `_is_context_length_error()` and `_trim_conversation_for_context()` for better handling of context length exceeded errors.
+- **Invalid Content Recovery:** Added `_is_invalid_content_error()` with automatic message sanitization and retry.
+
 ## [0.5.35] - 2025-12-03
 
 ### Fixed
