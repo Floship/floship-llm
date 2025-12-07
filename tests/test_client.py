@@ -623,8 +623,13 @@ class TestLLM:
             # But internal processing should remove think tags
             assert llm.messages[-1]["content"] == "Final response"
 
-    def test_extended_thinking_preserves_thinking_tags_in_history(self):
-        """Test that extended thinking preserves thinking tags in message history."""
+    def test_extended_thinking_strips_thinking_tags_from_history(self):
+        """Test that thinking tags are ALWAYS stripped from message history.
+
+        Heroku's OpenAI-compatible API causes 500 errors if <think> tags are
+        sent in message history on subsequent requests. The raw response
+        (with thinking tags) is preserved in get_last_raw_response() for user access.
+        """
         with patch("floship_llm.client.OpenAI"):
             llm = LLM(
                 extended_thinking={"enabled": True, "budget_tokens": 1024},
@@ -641,17 +646,18 @@ class TestLLM:
 
             result = llm.process_response(mock_response)
 
-            # Returns original content
+            # Returns original content (includes thinking tags)
             assert (
                 result == "<think>I'm reasoning about this</think>Here is my response"
             )
-            # Message history should preserve thinking tags for extended_thinking
+            # But message history should NOT have thinking tags (to avoid 500 errors)
             assert llm.messages[-1]["role"] == "assistant"
-            assert "<think>" in llm.messages[-1]["content"]
-            assert "I'm reasoning about this" in llm.messages[-1]["content"]
+            assert "<think>" not in llm.messages[-1]["content"]
+            # Raw response should still have thinking tags
+            assert "<think>" in llm.get_last_raw_response()
 
     def test_extended_thinking_disabled_strips_thinking_tags_from_history(self):
-        """Test that without extended thinking, thinking tags are stripped from history."""
+        """Test that without extended thinking, thinking tags are still stripped from history."""
         with patch("floship_llm.client.OpenAI"):
             llm = LLM(continuous=True)  # No extended_thinking
 
@@ -667,6 +673,8 @@ class TestLLM:
             assert llm.messages[-1]["role"] == "assistant"
             assert "<think>" not in llm.messages[-1]["content"]
             assert llm.messages[-1]["content"] == "Final response"
+            # Raw response should still have thinking tags
+            assert "<think>" in llm.get_last_raw_response()
 
     def test_on_assistant_message_callback_with_tool_calls(self):
         """Test on_assistant_message callback is called with tool calls."""

@@ -1807,16 +1807,13 @@ class LLM:
                     # Store raw response for debugging (includes thinking tags)
                     self._last_raw_response = full_response
 
-                    # When extended_thinking is enabled, preserve thinking tags in message history
-                    # Claude requires thinking blocks in assistant messages for multi-turn conversations
-                    if self.extended_thinking and self.extended_thinking.get("enabled"):
-                        self.add_message("assistant", full_response)
-                    else:
-                        # Remove thinking tags for message history when thinking is disabled
-                        clean_response = re.sub(
-                            r"<think>.*?</think>", "", full_response, flags=re.DOTALL
-                        ).strip()
-                        self.add_message("assistant", clean_response)
+                    # ALWAYS strip thinking tags from message history
+                    # Heroku's OpenAI-compatible API causes 500 errors if <think> tags are in history
+                    # Raw response (with thinking) is preserved in _last_raw_response for user access
+                    clean_response = re.sub(
+                        r"<think>.*?</think>", "", full_response, flags=re.DOTALL
+                    ).strip()
+                    self.add_message("assistant", clean_response)
 
                 # Track successful retry
                 if waf_attempt > 0:
@@ -2008,12 +2005,10 @@ class LLM:
             if retry_result is not None:
                 return retry_result
 
-        # When extended_thinking is enabled, preserve thinking tags in message history
-        # Claude requires thinking blocks in assistant messages for multi-turn conversations
-        if self.extended_thinking and self.extended_thinking.get("enabled"):
-            self.add_message("assistant", raw_message)
-        else:
-            self.add_message("assistant", message)
+        # ALWAYS strip thinking tags from message history
+        # Heroku's OpenAI-compatible API causes 500 errors if <think> tags are in history
+        # Raw response (with thinking) is preserved in _last_raw_response for user access
+        self.add_message("assistant", message)
 
         # Invoke callback for final assistant message (no tool calls)
         if self.on_assistant_message:
@@ -2079,12 +2074,10 @@ class LLM:
             if retry_result is not None:
                 return retry_result
 
-        # When extended_thinking is enabled, preserve thinking tags in message history
-        # Claude requires thinking blocks in assistant messages for multi-turn conversations
-        if self.extended_thinking and self.extended_thinking.get("enabled"):
-            self.add_message("assistant", raw_message)
-        else:
-            self.add_message("assistant", message)
+        # ALWAYS strip thinking tags from message history
+        # Heroku's OpenAI-compatible API causes 500 errors if <think> tags are in history
+        # Raw response (with thinking) is preserved in _last_raw_response for user access
+        self.add_message("assistant", message)
 
         # Invoke callback for final assistant message (no tool calls)
         if self.on_assistant_message:
@@ -2223,10 +2216,17 @@ class LLM:
         # Always set content - use placeholder if LLM didn't provide any
         # See: https://docs.anthropic.com/en/docs/build-with-claude/tool-use
         if raw_content and str(raw_content).strip():
-            assistant_message["content"] = str(raw_content)
+            # Always strip <think> tags from content stored in message history
+            # The raw response (including thinking) is preserved in _last_raw_response
+            # but Heroku's API doesn't accept <think> tags in message history on subsequent requests
+            clean_content = re.sub(
+                r"<think>.*?</think>", "", str(raw_content), flags=re.DOTALL
+            ).strip()
+            # Use clean content if it has substance, otherwise use placeholder
+            assistant_message["content"] = clean_content if clean_content else "."
             logger.debug(
                 f"Assistant message has content with tool_calls: "
-                f"{len(str(raw_content))} chars"
+                f"{len(clean_content)} chars (thinking tags stripped)"
             )
         else:
             # No content from LLM - use minimal placeholder (API requires non-empty content)
@@ -2573,19 +2573,15 @@ class LLM:
                         # Store raw response for debugging
                         self._last_raw_response = full_response
 
-                        # When extended_thinking is enabled, preserve thinking tags in history
-                        if self.extended_thinking and self.extended_thinking.get(
-                            "enabled"
-                        ):
-                            self.add_message("assistant", full_response)
-                        else:
-                            clean_response = re.sub(
-                                r"<think>.*?</think>",
-                                "",
-                                full_response,
-                                flags=re.DOTALL,
-                            ).strip()
-                            self.add_message("assistant", clean_response)
+                        # ALWAYS strip thinking tags from message history
+                        # Heroku's OpenAI-compatible API causes 500 errors if <think> tags are in history
+                        clean_response = re.sub(
+                            r"<think>.*?</think>",
+                            "",
+                            full_response,
+                            flags=re.DOTALL,
+                        ).strip()
+                        self.add_message("assistant", clean_response)
 
                 return generate_streamed_response()
             else:
