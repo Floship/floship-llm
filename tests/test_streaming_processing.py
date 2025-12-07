@@ -41,13 +41,15 @@ class TestStreamingProcessing:
 
     def test_process_streaming_response_thinking(self, llm):
         """Test removal of thinking tags."""
-        response = "<think>This is thinking process</think>Final answer"
+        response = "<reasoning>This is thinking process</reasoning>Final answer"
         result = llm._process_streaming_response(response)
         assert result == "Final answer"
 
     def test_process_streaming_response_thinking_multiline(self, llm):
         """Test removal of multiline thinking tags."""
-        response = "<think>\nThinking line 1\nThinking line 2\n</think>\nFinal answer"
+        response = (
+            "<reasoning>\nThinking line 1\nThinking line 2\n</reasoning>\nFinal answer"
+        )
         result = llm._process_streaming_response(response)
         assert result.strip() == "Final answer"
 

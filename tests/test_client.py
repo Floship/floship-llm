@@ -665,8 +665,8 @@ class TestLLM:
     def test_prompt_with_response_format(self):
         """Test prompt with response format returns user's original model type."""
         with patch("floship_llm.client.OpenAI") as mock_openai:
-            # Create mock streaming response with wrapped JSON content (thinking + response)
-            wrapped_response = '{"thinking": "Let me create a test record.", "response": {"name": "test", "value": 42}}'
+            # Create mock streaming response with wrapped JSON content (reasoning + response)
+            wrapped_response = '{"reasoning": "Let me create a test record.", "response": {"name": "test", "value": 42}}'
             mock_openai.return_value.chat.completions.create.return_value = (
                 create_mock_stream_response(wrapped_response)
             )
@@ -686,10 +686,8 @@ class TestLLM:
                 assert isinstance(result, ResponseModelForTesting)
                 assert result.name == "test"
                 assert result.value == 42
-                # Thinking should be captured
-                assert (
-                    llm.get_last_structured_thinking() == "Let me create a test record."
-                )
+                # Reasoning should be captured via unified interface
+                assert llm.get_last_reasoning() == "Let me create a test record."
 
     def test_retry_prompt(self):
         """Test retry prompt functionality."""
@@ -821,21 +819,23 @@ class TestLLM:
             llm = LLM()
 
             mock_choice = Mock()
-            mock_choice.message.content = "<think>Some thinking</think>Final response"
+            mock_choice.message.content = (
+                "<reasoning>Some thinking</reasoning>Final response"
+            )
             mock_response = Mock()
             mock_response.choices = [mock_choice]
 
             result = llm.process_response(mock_response)
 
             # Returns original content since no response_format is set
-            assert result == "<think>Some thinking</think>Final response"
+            assert result == "<reasoning>Some thinking</reasoning>Final response"
             # But internal processing should remove think tags
             assert llm.messages[-1]["content"] == "Final response"
 
     def test_extended_thinking_strips_thinking_tags_from_history(self):
         """Test that thinking tags are ALWAYS stripped from message history.
 
-        Heroku's OpenAI-compatible API causes 500 errors if <think> tags are
+        Heroku's OpenAI-compatible API causes 500 errors if <reasoning> tags are
         sent in message history on subsequent requests. The raw response
         (with thinking tags) is preserved in get_last_raw_response() for user access.
         """
@@ -847,7 +847,7 @@ class TestLLM:
 
             mock_choice = Mock()
             mock_choice.message.content = (
-                "<think>I'm reasoning about this</think>Here is my response"
+                "<reasoning>I'm reasoning about this</reasoning>Here is my response"
             )
             mock_choice.message.tool_calls = None
             mock_response = Mock()
@@ -857,13 +857,14 @@ class TestLLM:
 
             # Returns original content (includes thinking tags)
             assert (
-                result == "<think>I'm reasoning about this</think>Here is my response"
+                result
+                == "<reasoning>I'm reasoning about this</reasoning>Here is my response"
             )
             # But message history should NOT have thinking tags (to avoid 500 errors)
             assert llm.messages[-1]["role"] == "assistant"
-            assert "<think>" not in llm.messages[-1]["content"]
+            assert "<reasoning>" not in llm.messages[-1]["content"]
             # Raw response should still have thinking tags
-            assert "<think>" in llm.get_last_raw_response()
+            assert "<reasoning>" in llm.get_last_raw_response()
 
     def test_validate_messages_strips_thinking_tags_defensively(self):
         """Test that _validate_messages_for_api strips thinking tags as a defensive measure.
@@ -881,12 +882,12 @@ class TestLLM:
                 {"role": "user", "content": "Hello"},
                 {
                     "role": "assistant",
-                    "content": "<think>I'm thinking...</think>Hello! How can I help?",
+                    "content": "<reasoning>I'm thinking...</reasoning>Hello! How can I help?",
                 },
                 {"role": "user", "content": "What's 2+2?"},
                 {
                     "role": "assistant",
-                    "content": "<think>Let me calculate...</think>The answer is 4",
+                    "content": "<reasoning>Let me calculate...</reasoning>The answer is 4",
                     "tool_calls": [
                         {
                             "id": "call_1",
@@ -903,10 +904,10 @@ class TestLLM:
             # All assistant messages should have thinking tags stripped
             for msg in validated:
                 if msg["role"] == "assistant":
-                    assert "<think>" not in msg["content"], (
+                    assert "<reasoning>" not in msg["content"], (
                         f"Thinking tags not stripped from: {msg['content']}"
                     )
-                    assert "</think>" not in msg["content"]
+                    assert "</reasoning>" not in msg["content"]
 
             # Verify specific content
             assert validated[2]["content"] == "Hello! How can I help?"
@@ -919,7 +920,9 @@ class TestLLM:
             llm = LLM(continuous=True)  # No extended_thinking
 
             mock_choice = Mock()
-            mock_choice.message.content = "<think>Some thinking</think>Final response"
+            mock_choice.message.content = (
+                "<reasoning>Some thinking</reasoning>Final response"
+            )
             mock_choice.message.tool_calls = None
             mock_response = Mock()
             mock_response.choices = [mock_choice]
@@ -928,10 +931,10 @@ class TestLLM:
 
             # Message history should NOT have thinking tags
             assert llm.messages[-1]["role"] == "assistant"
-            assert "<think>" not in llm.messages[-1]["content"]
+            assert "<reasoning>" not in llm.messages[-1]["content"]
             assert llm.messages[-1]["content"] == "Final response"
             # Raw response should still have thinking tags
-            assert "<think>" in llm.get_last_raw_response()
+            assert "<reasoning>" in llm.get_last_raw_response()
 
     def test_handle_tool_calls_disables_extended_thinking_on_400(self):
         """Test that _handle_tool_calls retries without extended_thinking on 400 validation error.
@@ -1165,14 +1168,14 @@ class TestLLM:
 
             mock_choice = Mock()
             # Mock response contains wrapped format
-            mock_choice.message.content = 'Response: {"thinking": "Processing request.", "response": {"name": "test", "value": 42}}'
+            mock_choice.message.content = 'Response: {"reasoning": "Processing request.", "response": {"name": "test", "value": 42}}'
             mock_response = Mock()
             mock_response.choices = [mock_choice]
 
             with patch(
                 "floship_llm.utils.lm_json_utils.extract_strict_json"
             ) as mock_extract:
-                mock_extract.return_value = '{"thinking": "Processing request.", "response": {"name": "test", "value": 42}}'
+                mock_extract.return_value = '{"reasoning": "Processing request.", "response": {"name": "test", "value": 42}}'
 
                 result = llm.process_response(mock_response)
 
@@ -1704,7 +1707,7 @@ class TestLLM:
         with patch("floship_llm.client.OpenAI") as mock_openai:
             mock_client = mock_openai.return_value
             # Streaming returns wrapped JSON response
-            wrapped_response = '{"thinking": "Generating test record.", "response": {"name": "Alice", "value": 100}}'
+            wrapped_response = '{"reasoning": "Generating test record.", "response": {"name": "Alice", "value": 100}}'
             mock_client.chat.completions.create.return_value = (
                 create_mock_stream_response(wrapped_response)
             )
@@ -2107,8 +2110,8 @@ class TestResponseFormatThinkingWrapper:
             # Should be wrapped
             assert llm._response_format_wrapped is True
             assert llm._original_response_format == ResponseModelForTesting
-            # Wrapper should have thinking and response fields
-            assert "thinking" in llm.response_format.model_fields
+            # Wrapper should have reasoning and response fields
+            assert "reasoning" in llm.response_format.model_fields
             assert "response" in llm.response_format.model_fields
 
     def test_response_format_not_wrapped_for_thinking_model(self):
@@ -2122,11 +2125,11 @@ class TestResponseFormatThinkingWrapper:
             assert llm.response_format == ThinkingResponseModelForTesting
 
     def test_has_thinking_field_detection(self):
-        """Test _has_thinking_field correctly detects thinking field."""
+        """Test _has_thinking_field correctly detects reasoning field."""
         with patch("floship_llm.client.OpenAI"):
             llm = LLM()
 
-            # ThinkingModel subclass has thinking field
+            # ThinkingModel subclass has reasoning field
             assert llm._has_thinking_field(ThinkingResponseModelForTesting) is True
 
             # Plain BaseModel does not
@@ -2142,7 +2145,7 @@ class TestResponseFormatThinkingWrapper:
 
             # Create a mock wrapped response
             wrapped = llm.response_format(
-                thinking="My reasoning here",
+                reasoning="My reasoning here",
                 response=ResponseModelForTesting(name="test", value=42),
             )
 
@@ -2152,8 +2155,8 @@ class TestResponseFormatThinkingWrapper:
             assert isinstance(result, ResponseModelForTesting)
             assert result.name == "test"
             assert result.value == 42
-            # Thinking should be stored
-            assert llm._last_structured_thinking == "My reasoning here"
+            # Reasoning should be stored via unified interface
+            assert llm.get_last_reasoning() == "My reasoning here"
 
     def test_unwrap_thinking_response_returns_as_is_for_thinking_model(self):
         """Test _unwrap_thinking_response returns ThinkingModel as-is."""
@@ -2161,7 +2164,7 @@ class TestResponseFormatThinkingWrapper:
             llm = LLM(response_format=ThinkingResponseModelForTesting)
 
             response = ThinkingResponseModelForTesting(
-                thinking="My reasoning", answer="Paris", confidence=100
+                reasoning="My reasoning", answer="Paris", confidence=100
             )
 
             result = llm._unwrap_thinking_response(response)
@@ -2171,41 +2174,43 @@ class TestResponseFormatThinkingWrapper:
             assert isinstance(result, ThinkingResponseModelForTesting)
 
     def test_get_last_structured_thinking_returns_captured_thinking(self):
-        """Test get_last_structured_thinking returns thinking from wrapped response."""
+        """Test get_last_reasoning returns reasoning from wrapped response."""
         with patch("floship_llm.client.OpenAI"):
             llm = LLM(response_format=ResponseModelForTesting)
 
-            # Manually set thinking (normally done during unwrap)
-            llm._last_structured_thinking = "Test thinking content"
+            # Manually set reasoning (normally done during unwrap)
+            llm._last_native_reasoning = "Test reasoning content"
 
-            assert llm.get_last_structured_thinking() == "Test thinking content"
+            assert llm.get_last_reasoning() == "Test reasoning content"
+            # Backward compat method should also work
+            assert llm.get_last_structured_thinking() == "Test reasoning content"
 
     def test_get_last_structured_thinking_none_initially(self):
-        """Test get_last_structured_thinking returns None before any response."""
+        """Test get_last_reasoning returns None before any response."""
         with patch("floship_llm.client.OpenAI"):
             llm = LLM(response_format=ResponseModelForTesting)
 
-            assert llm.get_last_structured_thinking() is None
+            assert llm.get_last_reasoning() is None
 
     def test_wrapper_schema_has_correct_structure(self):
-        """Test that the wrapper schema has thinking first, then response."""
+        """Test that the wrapper schema has reasoning first, then response."""
         with patch("floship_llm.client.OpenAI"):
             llm = LLM(response_format=ResponseModelForTesting)
 
             schema = llm.response_format.model_json_schema()
 
             # Should have both required fields
-            assert "thinking" in schema["required"]
+            assert "reasoning" in schema["required"]
             assert "response" in schema["required"]
             # Should have properties
-            assert "thinking" in schema["properties"]
+            assert "reasoning" in schema["properties"]
             assert "response" in schema["properties"]
 
     def test_prompt_with_thinking_model_returns_thinking_in_model(self):
-        """Test prompt with ThinkingModel returns model with thinking field populated."""
+        """Test prompt with ThinkingModel returns model with reasoning field populated."""
         with patch("floship_llm.client.OpenAI") as mock_openai:
             # ThinkingModel response is NOT wrapped, so mock direct response
-            response_json = '{"thinking": "Capital cities are well-known facts.", "answer": "Paris", "confidence": 100}'
+            response_json = '{"reasoning": "Capital cities are well-known facts.", "answer": "Paris", "confidence": 100}'
             mock_openai.return_value.chat.completions.create.return_value = (
                 create_mock_stream_response(response_json)
             )
@@ -2220,13 +2225,13 @@ class TestResponseFormatThinkingWrapper:
 
                 result = llm.prompt("What is the capital of France?")
 
-                # Should return ThinkingModel with thinking populated
+                # Should return ThinkingModel with reasoning populated
                 assert isinstance(result, ThinkingResponseModelForTesting)
-                assert result.thinking == "Capital cities are well-known facts."
+                assert result.reasoning == "Capital cities are well-known facts."
                 assert result.answer == "Paris"
                 assert result.confidence == 100
-                # get_last_structured_thinking should be None (not wrapped)
-                assert llm.get_last_structured_thinking() is None
+                # get_last_reasoning should be None (not wrapped, reasoning is in model itself)
+                assert llm.get_last_reasoning() is None
 
     def test_extended_thinking_disabled_when_thinking_model_used(self):
         """Test extended_thinking is auto-disabled when ThinkingModel is used."""

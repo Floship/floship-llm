@@ -593,9 +593,7 @@ class LLM:
 
         # Debug tracking - store last raw response for debugging
         self._last_raw_response = None
-        # Store last structured thinking (from wrapped response_format)
-        self._last_structured_thinking = None
-        # Store last native reasoning from extended_thinking API response
+        # Store reasoning from any source (native API, pseudo-thinking tags, or structured output)
         self._last_native_reasoning = None
 
         # Extended thinking state management
@@ -622,26 +620,13 @@ class LLM:
         """
         return self._last_raw_response
 
-    def get_last_structured_thinking(self) -> Optional[str]:
-        """Get the thinking/reasoning from the last structured response.
-
-        When using response_format that doesn't extend ThinkingModel,
-        the library automatically wraps it to capture Claude's reasoning.
-        This method returns that captured thinking.
-
-        Returns:
-            The thinking string from the last structured response, or None
-            if no structured response was made or if the model already
-            had a thinking field (not wrapped).
-        """
-        return self._last_structured_thinking
-
     def get_last_reasoning(self) -> Optional[str]:
         """Get the reasoning/thinking from the last response.
 
-        This returns Claude's chain-of-thought reasoning from either:
-        1. Native extended_thinking (when include_reasoning=True in API response)
-        2. Pseudo-thinking mode (extracted from <think> tags when native thinking unavailable)
+        This returns Claude's chain-of-thought reasoning from any source:
+        1. Native extended_thinking API response (message.reasoning.thinking)
+        2. Pseudo-thinking mode (extracted from <reasoning> tags)
+        3. Structured output with reasoning field (ThinkingModel or wrapped models)
 
         The reasoning is always stripped from the main response content and stored
         separately. Use this method to access it.
@@ -649,6 +634,17 @@ class LLM:
         Returns:
             The reasoning string from the last response, or None if no
             reasoning was captured.
+        """
+        return self._last_native_reasoning
+
+    def get_last_structured_thinking(self) -> Optional[str]:
+        """Deprecated: Use get_last_reasoning() instead.
+
+        This method is kept for backward compatibility but will be removed in a future version.
+        All reasoning is now accessed through get_last_reasoning().
+
+        Returns:
+            The reasoning string from the last response, or None.
         """
         return self._last_native_reasoning
 
@@ -1237,24 +1233,24 @@ class LLM:
         )
 
     def _has_thinking_field(self, model: type) -> bool:
-        """Check if a Pydantic model already has a 'thinking' field."""
+        """Check if a Pydantic model already has a 'reasoning' field."""
         if not model or not issubclass(model, BaseModel):
             return False
         # Check if it's a subclass of ThinkingModel
         if issubclass(model, ThinkingModel):
             return True
-        # Check if it has a 'thinking' field defined
-        return "thinking" in model.model_fields
+        # Check if it has a 'reasoning' field defined
+        return "reasoning" in model.model_fields
 
     def _ensure_thinking_in_response_format(self) -> None:
         """
-        Wrap response_format with a thinking field if it doesn't already have one.
+        Wrap response_format with a reasoning field if it doesn't already have one.
 
         This ensures Claude always provides chain-of-thought reasoning in structured output,
         even when the user's model doesn't extend ThinkingModel.
 
-        If the model already has a thinking field, extended_thinking is disabled to avoid
-        redundancy (schema-based thinking takes precedence over native extended thinking).
+        If the model already has a reasoning field, extended_thinking is disabled to avoid
+        redundancy (schema-based reasoning takes precedence over native extended thinking).
         """
         if not self._original_response_format:
             return
@@ -1262,26 +1258,26 @@ class LLM:
         if self._has_thinking_field(self._original_response_format):
             logger.debug(
                 f"Response format {self._original_response_format.__name__} "
-                "already has thinking field, no wrapping needed"
+                "already has reasoning field, no wrapping needed"
             )
             self._response_format_wrapped = False
             self.response_format = self._original_response_format
 
-            # Disable extended_thinking to avoid redundancy - schema thinking takes precedence
+            # Disable extended_thinking to avoid redundancy - schema reasoning takes precedence
             if self.extended_thinking:
                 logger.info(
                     f"Disabling extended_thinking because response_format "
-                    f"{self._original_response_format.__name__} already has thinking field. "
-                    "Schema-based thinking takes precedence over native extended thinking."
+                    f"{self._original_response_format.__name__} already has reasoning field. "
+                    "Schema-based reasoning takes precedence over native extended thinking."
                 )
                 self.extended_thinking = None
                 self._thinking_auto_disabled = True
             return
 
-        # Create a wrapper model with thinking as the first field
+        # Create a wrapper model with reasoning as the first field
         original_model = self._original_response_format
         logger.info(
-            f"Wrapping response format {original_model.__name__} with thinking field"
+            f"Wrapping response format {original_model.__name__} with reasoning field"
         )
 
         # Dynamically create a new model with thinking + original fields
@@ -1303,11 +1299,11 @@ class LLM:
         self.response_format = ThinkingWrapper
         self._response_format_wrapped = True
 
-        # Also disable extended_thinking for wrapped models - the wrapper provides thinking
+        # Also disable extended_thinking for wrapped models - the wrapper provides reasoning
         if self.extended_thinking:
             logger.info(
                 "Disabling extended_thinking because response_format wrapper "
-                "already captures thinking. Schema-based thinking takes precedence."
+                "already captures reasoning. Schema-based reasoning takes precedence."
             )
             self.extended_thinking = None
             self._thinking_auto_disabled = True
@@ -1316,9 +1312,9 @@ class LLM:
 
     def _unwrap_thinking_response(self, parsed_response: BaseModel) -> BaseModel:
         """
-        Unwrap a thinking-wrapped response to return the user's original model.
+        Unwrap a reasoning-wrapped response to return the user's original model.
 
-        If the response was wrapped with thinking, extract just the 'response' field.
+        If the response was wrapped with reasoning, extract just the 'response' field.
         If not wrapped, return as-is.
 
         Args:
@@ -1333,14 +1329,14 @@ class LLM:
         # Extract the nested 'response' field which contains the user's model
         if hasattr(parsed_response, "response"):
             user_response = parsed_response.response
-            # Store thinking for potential access
-            if hasattr(parsed_response, "thinking"):
-                self._last_structured_thinking = parsed_response.thinking
+            # Store reasoning for unified access via get_last_reasoning()
+            if hasattr(parsed_response, "reasoning"):
+                self._last_native_reasoning = parsed_response.reasoning
                 logger.debug(
-                    f"Extracted thinking from structured response: "
-                    f"{parsed_response.thinking[:100]}..."
-                    if len(parsed_response.thinking) > 100
-                    else parsed_response.thinking
+                    f"Extracted reasoning from structured response: "
+                    f"{parsed_response.reasoning[:100]}..."
+                    if len(parsed_response.reasoning) > 100
+                    else parsed_response.reasoning
                 )
             return user_response
 
@@ -1442,10 +1438,10 @@ class LLM:
 
     def _get_pseudo_thinking_instruction(self) -> str:
         """
-        Get the instruction to make Claude use <think> tags for reasoning.
+        Get the instruction to make Claude use <reasoning> tags for reasoning.
 
         This is used when native extended_thinking is not available or was rejected.
-        The instruction asks Claude to start responses with a <think> block containing
+        The instruction asks Claude to start responses with a <reasoning> block containing
         its reasoning process.
 
         Returns:
@@ -1453,9 +1449,9 @@ class LLM:
         """
         return (
             "IMPORTANT: Before responding, you MUST first think through your reasoning "
-            "step by step inside <think></think> tags. Start your response with the "
-            "<think> tag immediately (no text before it). Put your complete chain of "
-            "thought, analysis, and reasoning inside these tags. After closing </think>, "
+            "step by step inside <reasoning></reasoning> tags. Start your response with the "
+            "<reasoning> tag immediately (no text before it). Put your complete chain of "
+            "thought, analysis, and reasoning inside these tags. After closing </reasoning>, "
             "provide your final response to the user. The thinking section will be "
             "processed separately and not shown to the user."
         )
@@ -2030,7 +2026,7 @@ class LLM:
                         self._use_pseudo_thinking = True
                         logger.warning(
                             "Extended thinking was rejected by the API; "
-                            "switching to pseudo-thinking mode (prompt-based <think> tags)."
+                            "switching to pseudo-thinking mode (prompt-based <reasoning> tags)."
                         )
                         continue
 
@@ -2254,10 +2250,13 @@ class LLM:
                     self._last_raw_response = full_response
 
                     # ALWAYS strip thinking tags from message history
-                    # Heroku's OpenAI-compatible API causes 500 errors if <think> tags are in history
+                    # Heroku's OpenAI-compatible API causes 500 errors if <reasoning> tags are in history
                     # Raw response (with thinking) is preserved in _last_raw_response for user access
                     clean_response = re.sub(
-                        r"<think>.*?</think>", "", full_response, flags=re.DOTALL
+                        r"<reasoning>.*?</reasoning>",
+                        "",
+                        full_response,
+                        flags=re.DOTALL,
                     ).strip()
                     self.add_message("assistant", clean_response)
 
@@ -2463,7 +2462,7 @@ class LLM:
 
         # Extract reasoning from response (native API or pseudo-thinking tags)
         # When include_reasoning=True, the API returns message.reasoning.thinking
-        # For pseudo-thinking, we extract from <think> tags
+        # For pseudo-thinking, we extract from <reasoning> tags
         self._last_native_reasoning = None
 
         # First check for native reasoning from extended_thinking API response
@@ -2479,10 +2478,10 @@ class LLM:
         except (AttributeError, TypeError):
             pass  # No native reasoning available
 
-        # If no native reasoning, check for pseudo-thinking <think> tags
+        # If no native reasoning, check for pseudo-thinking <reasoning> tags
         if not self._last_native_reasoning:
             thinking_match = re.search(
-                r"<think>(.*?)</think>", raw_message, flags=re.DOTALL
+                r"<reasoning>(.*?)</reasoning>", raw_message, flags=re.DOTALL
             )
             if thinking_match:
                 self._last_native_reasoning = thinking_match.group(1).strip()
@@ -2490,9 +2489,9 @@ class LLM:
                     f"Pseudo-thinking reasoning extracted ({len(self._last_native_reasoning)} chars)"
                 )
 
-        # Always strip <think> tags from message for clean response
+        # Always strip <reasoning> tags from message for clean response
         message = re.sub(
-            r"<think>.*?</think>", "", raw_message, flags=re.DOTALL
+            r"<reasoning>.*?</reasoning>", "", raw_message, flags=re.DOTALL
         ).strip()
 
         # Extract response tags if present
@@ -2509,7 +2508,7 @@ class LLM:
                 return retry_result
 
         # ALWAYS strip thinking tags from message history
-        # Heroku's OpenAI-compatible API causes 500 errors if <think> tags are in history
+        # Heroku's OpenAI-compatible API causes 500 errors if <reasoning> tags are in history
         # Raw response (with thinking) is preserved in _last_raw_response for user access
         self.add_message("assistant", message)
 
@@ -2562,10 +2561,10 @@ class LLM:
                 f"Raw streaming response ({len(raw_message)} chars): {raw_message[:500]}..."
             )
 
-        # Extract reasoning from pseudo-thinking <think> tags (streaming doesn't have native reasoning)
+        # Extract reasoning from pseudo-thinking <reasoning> tags (streaming doesn't have native reasoning)
         self._last_native_reasoning = None
         thinking_match = re.search(
-            r"<think>(.*?)</think>", raw_message, flags=re.DOTALL
+            r"<reasoning>(.*?)</reasoning>", raw_message, flags=re.DOTALL
         )
         if thinking_match:
             self._last_native_reasoning = thinking_match.group(1).strip()
@@ -2573,9 +2572,9 @@ class LLM:
                 f"Pseudo-thinking reasoning extracted ({len(self._last_native_reasoning)} chars)"
             )
 
-        # Always strip <think> tags from message for clean response
+        # Always strip <reasoning> tags from message for clean response
         message = re.sub(
-            r"<think>.*?</think>", "", raw_message, flags=re.DOTALL
+            r"<reasoning>.*?</reasoning>", "", raw_message, flags=re.DOTALL
         ).strip()
 
         # Extract response tags if present
@@ -2592,7 +2591,7 @@ class LLM:
                 return retry_result
 
         # ALWAYS strip thinking tags from message history
-        # Heroku's OpenAI-compatible API causes 500 errors if <think> tags are in history
+        # Heroku's OpenAI-compatible API causes 500 errors if <reasoning> tags are in history
         # Raw response (with thinking) is preserved in _last_raw_response for user access
         self.add_message("assistant", message)
 
@@ -2735,11 +2734,11 @@ class LLM:
         # Always set content - use placeholder if LLM didn't provide any
         # See: https://docs.anthropic.com/en/docs/build-with-claude/tool-use
         if raw_content and str(raw_content).strip():
-            # Always strip <think> tags from content stored in message history
+            # Always strip <reasoning> tags from content stored in message history
             # The raw response (including thinking) is preserved in _last_raw_response
-            # but Heroku's API doesn't accept <think> tags in message history on subsequent requests
+            # but Heroku's API doesn't accept <reasoning> tags in message history on subsequent requests
             clean_content = re.sub(
-                r"<think>.*?</think>", "", str(raw_content), flags=re.DOTALL
+                r"<reasoning>.*?</reasoning>", "", str(raw_content), flags=re.DOTALL
             ).strip()
             # Use clean content if it has substance, otherwise use placeholder
             assistant_message["content"] = clean_content if clean_content else "."
@@ -3115,9 +3114,9 @@ class LLM:
                         self._last_raw_response = full_response
 
                         # ALWAYS strip thinking tags from message history
-                        # Heroku's OpenAI-compatible API causes 500 errors if <think> tags are in history
+                        # Heroku's OpenAI-compatible API causes 500 errors if <reasoning> tags are in history
                         clean_response = re.sub(
-                            r"<think>.*?</think>",
+                            r"<reasoning>.*?</reasoning>",
                             "",
                             full_response,
                             flags=re.DOTALL,
@@ -3467,9 +3466,9 @@ class LLM:
                 existing_content = validated_msg.get("content")
                 if existing_content and str(existing_content).strip():
                     # Preserve the LLM's response text (e.g., "I'll help you with that")
-                    # ALWAYS strip <think> tags - Heroku API causes 500 if they're in history
+                    # ALWAYS strip <reasoning> tags - Heroku API causes 500 if they're in history
                     clean_content = re.sub(
-                        r"<think>.*?</think>",
+                        r"<reasoning>.*?</reasoning>",
                         "",
                         str(existing_content),
                         flags=re.DOTALL,
@@ -3503,12 +3502,12 @@ class LLM:
                 )
                 validated_msg["content"] = "Message content conversion failed"
 
-            # ALWAYS strip <think> tags from assistant messages
+            # ALWAYS strip <reasoning> tags from assistant messages
             # Heroku's OpenAI-compatible API returns 500 if thinking tags are in history
             role = validated_msg["role"].lower()
             if role == "assistant":
                 validated_msg["content"] = re.sub(
-                    r"<think>.*?</think>",
+                    r"<reasoning>.*?</reasoning>",
                     "",
                     validated_msg["content"],
                     flags=re.DOTALL,

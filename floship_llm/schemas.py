@@ -5,9 +5,9 @@ from pydantic import BaseModel, Field
 
 class ThinkingModel(BaseModel):
     # A base model for representing a thought process or reasoning for LLM.
-    thinking: str = Field(
+    reasoning: str = Field(
         ...,
-        title="Thought Process",
+        title="Reasoning Process",
         description="A string representing the thought process, chain of thought, or reasoning behind the action taken.",
     )
 

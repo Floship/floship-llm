@@ -139,13 +139,13 @@ class TestImportedClassesFunctionality:
 
     def test_thinking_model_instantiation(self):
         """Test that ThinkingModel can be instantiated."""
-        model = ThinkingModel(thinking="Test thinking")
-        assert model.thinking == "Test thinking"
+        model = ThinkingModel(reasoning="Test reasoning")
+        assert model.reasoning == "Test reasoning"
 
     def test_suggestion_instantiation(self):
         """Test that Suggestion can be instantiated."""
         suggestion = Suggestion(
-            thinking="Test thinking",
+            reasoning="Test reasoning",
             file_path="/test/path.py",
             line=1,
             suggestion="```suggestion\\ntest\\n```",
@@ -153,14 +153,14 @@ class TestImportedClassesFunctionality:
             type="bug",
             reason="Test reason",
         )
-        assert suggestion.thinking == "Test thinking"
+        assert suggestion.reasoning == "Test reasoning"
         assert suggestion.file_path == "/test/path.py"
         assert suggestion.type == "bug"
 
     def test_suggestions_response_instantiation(self):
         """Test that SuggestionsResponse can be instantiated."""
         suggestion = Suggestion(
-            thinking="Individual thinking",
+            reasoning="Individual reasoning",
             file_path="/test/path.py",
             line=1,
             suggestion="```suggestion\\ntest\\n```",
@@ -170,17 +170,17 @@ class TestImportedClassesFunctionality:
         )
 
         response = SuggestionsResponse(
-            thinking="Overall thinking", suggestions=[suggestion]
+            reasoning="Overall reasoning", suggestions=[suggestion]
         )
 
-        assert response.thinking == "Overall thinking"
+        assert response.reasoning == "Overall reasoning"
         assert len(response.suggestions) == 1
         assert response.suggestions[0].type == "bug"
 
     def test_labels_instantiation(self):
         """Test that Labels can be instantiated."""
-        labels = Labels(thinking="Test thinking", labels=["bug", "priority-high"])
-        assert labels.thinking == "Test thinking"
+        labels = Labels(reasoning="Test reasoning", labels=["bug", "priority-high"])
+        assert labels.reasoning == "Test reasoning"
         assert labels.labels == ["bug", "priority-high"]
 
     def test_json_utils_functionality(self):

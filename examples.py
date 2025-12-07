@@ -69,7 +69,7 @@ def example_structured_labels():
 
     response = llm.prompt(prompt)
     print(f"Generated labels: {response.labels}")
-    print(f"Thinking process: {response.thinking[:100]}...")
+    print(f"Reasoning process: {response.reasoning[:100]}...")
 
 
 # Example 4: Custom Schema

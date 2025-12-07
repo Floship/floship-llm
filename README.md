@@ -186,20 +186,18 @@ llm = LLM(
 )
 
 response = llm.prompt("What sorting algorithm is best for nearly-sorted data?")
-print(response)  # Clean response without <think> tags
+print(response)  # Clean response without <reasoning> tags
 
-# Extract thinking from raw response
-raw = llm.get_last_raw_response()
-match = re.search(r'<think>(.*?)</think>', raw, re.DOTALL)
-if match:
-    print("Reasoning:", match.group(1))
+# Access reasoning via get_last_reasoning()
+reasoning = llm.get_last_reasoning()
+if reasoning:
+    print("Reasoning:", reasoning)
 ```
 
 #### With response_format (Structured Output)
 
 ```python
 from pydantic import BaseModel
-import re
 
 class Analysis(BaseModel):
     answer: str
@@ -213,11 +211,10 @@ llm = LLM(
 result = llm.prompt("Analyze if P=NP")
 print(result.answer, result.confidence)  # Parsed Pydantic model
 
-# Thinking is still in raw response
-raw = llm.get_last_raw_response()
-match = re.search(r'<think>(.*?)</think>', raw, re.DOTALL)
-if match:
-    print("Reasoning:", match.group(1))
+# Reasoning is still accessible
+reasoning = llm.get_last_reasoning()
+if reasoning:
+    print("Reasoning:", reasoning)
 ```
 
 #### With Streaming
@@ -229,11 +226,11 @@ llm = LLM(
 )
 
 for chunk in llm.prompt_stream("Explain quantum entanglement"):
-    print(chunk, end="", flush=True)  # Streamed without <think> tags
+    print(chunk, end="", flush=True)  # Streamed without <reasoning> tags
 
 # After streaming completes
-raw = llm.get_last_raw_response()
-# Extract thinking same as above
+reasoning = llm.get_last_reasoning()
+# Reasoning available after stream completes
 ```
 
 **Note:** Thinking content is only available after the full response completes.

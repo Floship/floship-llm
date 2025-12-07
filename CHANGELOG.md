@@ -11,9 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **`include_reasoning` Support:** Properly captures native reasoning from Heroku API's `message.reasoning.thinking` field when `include_reasoning=True` is passed.
-- **`get_last_reasoning()` Method:** New method to access reasoning/thinking from the last response. Captures from two sources:
+- **Unified `get_last_reasoning()` Method:** Single interface to access reasoning from any source:
   1. Native extended thinking API response (`message.reasoning.thinking`)
-  2. Pseudo-thinking `<think>` tags when native thinking is unavailable
+  2. Pseudo-thinking `<reasoning>` tags when native thinking is unavailable
+  3. Structured output with `reasoning` field (ThinkingModel or wrapped models)
 
   ```python
   response = llm.prompt("Solve 2+2", include_reasoning=True)
@@ -21,18 +22,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ```
 
 ### Changed
+- **ThinkingModel Uses `reasoning` Field:** The `ThinkingModel` base class now uses `reasoning` instead of `thinking` as the field name for consistency.
 - **Reasoning Not Embedded:** Reasoning is no longer embedded in response content. Access it via `get_last_reasoning()` instead for clean separation of content and reasoning.
+- **Thinking Tags Renamed:** Pseudo-thinking now uses `<reasoning>` tags instead of `<think>` tags for better clarity and consistency.
+
+### Deprecated
+- **`get_last_structured_thinking()`:** Use `get_last_reasoning()` instead. The old method is kept for backward compatibility but will be removed in a future version.
 
 ## [0.5.41] - 2025-12-07
 
 ### Added
-- **Response Format Thinking Auto-Wrap:** When using `response_format` with a Pydantic model that doesn't have a `thinking` field, the library now automatically wraps it to capture Claude's chain-of-thought reasoning. Access the reasoning via `get_last_structured_thinking()`. Models extending `ThinkingModel` are returned as-is.
-- **`get_last_structured_thinking()` Method:** New method to retrieve the thinking/reasoning from the last structured response when using auto-wrapped response formats.
-- **Pseudo-Thinking Mode:** When native `extended_thinking` fails (e.g., after tool execution), the library automatically switches to prompt-based pseudo-thinking using `<think>` tags.
+- **Response Format Reasoning Auto-Wrap:** When using `response_format` with a Pydantic model that doesn't have a `reasoning` field, the library now automatically wraps it to capture Claude's chain-of-thought reasoning. Access the reasoning via `get_last_reasoning()`. Models extending `ThinkingModel` are returned as-is.
+- **Pseudo-Thinking Mode:** When native `extended_thinking` fails (e.g., after tool execution), the library automatically switches to prompt-based pseudo-thinking using `<reasoning>` tags.
 
 ### Changed
-- **Thinking Redundancy Prevention:** When `response_format` already has a `thinking` field (either extending `ThinkingModel` or having the field directly), native `extended_thinking` is automatically disabled to avoid redundant thinking mechanisms. Schema-based thinking takes precedence.
-- **Always Strip Thinking Tags:** Thinking tags (`<think>...</think>`) are now always stripped from message history before API calls, preventing 500 errors from Heroku's API.
+- **Reasoning Redundancy Prevention:** When `response_format` already has a `reasoning` field (either extending `ThinkingModel` or having the field directly), native `extended_thinking` is automatically disabled to avoid redundant reasoning mechanisms. Schema-based reasoning takes precedence.
+- **Always Strip Reasoning Tags:** Reasoning tags (`<reasoning>...</reasoning>`) are now always stripped from message history before API calls, preventing 500 errors from Heroku's API.
 
 ### Fixed
 - **Extended Thinking Recovery:** Added automatic recovery when extended thinking validation fails after tool execution - switches to pseudo-thinking mode seamlessly.

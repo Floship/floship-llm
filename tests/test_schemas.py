@@ -11,10 +11,10 @@ class TestThinkingModel:
 
     def test_thinking_model_valid(self):
         """Test ThinkingModel with valid data."""
-        data = {"thinking": "This is my thought process"}
+        data = {"reasoning": "This is my thought process"}
         model = ThinkingModel(**data)
 
-        assert model.thinking == "This is my thought process"
+        assert model.reasoning == "This is my thought process"
 
     def test_thinking_model_missing_thinking(self):
         """Test ThinkingModel with missing thinking field."""
@@ -24,37 +24,37 @@ class TestThinkingModel:
         errors = exc_info.value.errors()
         assert len(errors) == 1
         assert errors[0]["type"] == "missing"
-        assert errors[0]["loc"] == ("thinking",)
+        assert errors[0]["loc"] == ("reasoning",)
 
     def test_thinking_model_empty_thinking(self):
         """Test ThinkingModel with empty thinking field."""
-        data = {"thinking": ""}
+        data = {"reasoning": ""}
         model = ThinkingModel(**data)
 
-        assert model.thinking == ""
+        assert model.reasoning == ""
 
     def test_thinking_model_extra_fields(self):
         """Test ThinkingModel with extra fields."""
-        data = {"thinking": "My thoughts", "extra_field": "should be ignored"}
+        data = {"reasoning": "My thoughts", "extra_field": "should be ignored"}
         model = ThinkingModel(**data)
 
-        assert model.thinking == "My thoughts"
+        assert model.reasoning == "My thoughts"
         assert not hasattr(model, "extra_field")
 
     def test_thinking_model_json_serialization(self):
         """Test ThinkingModel JSON serialization."""
-        data = {"thinking": "Test thinking"}
+        data = {"reasoning": "Test thinking"}
         model = ThinkingModel(**data)
 
         json_data = model.model_dump()
-        assert json_data == {"thinking": "Test thinking"}
+        assert json_data == {"reasoning": "Test thinking"}
 
     def test_thinking_model_from_json(self):
         """Test ThinkingModel creation from JSON."""
-        json_str = '{"thinking": "From JSON"}'
+        json_str = '{"reasoning": "From JSON"}'
         model = ThinkingModel.model_validate_json(json_str)
 
-        assert model.thinking == "From JSON"
+        assert model.reasoning == "From JSON"
 
 
 class TestSuggestion:
@@ -63,7 +63,7 @@ class TestSuggestion:
     def test_suggestion_valid(self):
         """Test Suggestion with valid data."""
         data = {
-            "thinking": "Need to fix this bug",
+            "reasoning": "Need to fix this bug",
             "file_path": "/path/to/file.py",
             "line": 42,
             "suggestion": "```suggestion\\nfixed code\\n```",
@@ -73,7 +73,7 @@ class TestSuggestion:
         }
         suggestion = Suggestion(**data)
 
-        assert suggestion.thinking == "Need to fix this bug"
+        assert suggestion.reasoning == "Need to fix this bug"
         assert suggestion.file_path == "/path/to/file.py"
         assert suggestion.line == 42
         assert suggestion.suggestion == "```suggestion\\nfixed code\\n```"
@@ -92,7 +92,7 @@ class TestSuggestion:
 
         errors = exc_info.value.errors()
         required_fields = {
-            "thinking",
+            "reasoning",
             "file_path",
             "line",
             "suggestion",
@@ -107,7 +107,7 @@ class TestSuggestion:
     def test_suggestion_invalid_line_type(self):
         """Test Suggestion with invalid line type."""
         data = {
-            "thinking": "Test",
+            "reasoning": "Test",
             "file_path": "/path/to/file.py",
             "line": "not_a_number",  # Should be int
             "suggestion": "```suggestion\\ncode\\n```",
@@ -127,7 +127,7 @@ class TestSuggestion:
     def test_suggestion_invalid_severity_type(self):
         """Test Suggestion with invalid severity type."""
         data = {
-            "thinking": "Test",
+            "reasoning": "Test",
             "file_path": "/path/to/file.py",
             "line": 1,
             "suggestion": "```suggestion\\ncode\\n```",
@@ -151,7 +151,7 @@ class TestSuggestion:
     def test_suggestion_valid_types(self, suggestion_type):
         """Test Suggestion with various valid types."""
         data = {
-            "thinking": "Test thinking",
+            "reasoning": "Test thinking",
             "file_path": "/path/to/file.py",
             "line": 1,
             "suggestion": "```suggestion\\ncode\\n```",
@@ -165,7 +165,7 @@ class TestSuggestion:
     def test_suggestion_json_serialization(self):
         """Test Suggestion JSON serialization."""
         data = {
-            "thinking": "Test thinking",
+            "reasoning": "Test thinking",
             "file_path": "/path/to/file.py",
             "line": 1,
             "suggestion": "```suggestion\\ncode\\n```",
@@ -182,7 +182,7 @@ class TestSuggestion:
         """Test Suggestion creation from JSON."""
         json_str = """
         {
-            "thinking": "Test thinking",
+            "reasoning": "Test thinking",
             "file_path": "/path/to/file.py",
             "line": 1,
             "suggestion": "```suggestion\\ncode\\n```",
@@ -193,7 +193,7 @@ class TestSuggestion:
         """
         suggestion = Suggestion.model_validate_json(json_str)
 
-        assert suggestion.thinking == "Test thinking"
+        assert suggestion.reasoning == "Test thinking"
         assert suggestion.file_path == "/path/to/file.py"
         assert suggestion.line == 1
 
@@ -204,7 +204,7 @@ class TestSuggestionsResponse:
     def test_suggestions_response_valid(self):
         """Test SuggestionsResponse with valid data."""
         suggestion_data = {
-            "thinking": "Individual suggestion thinking",
+            "reasoning": "Individual suggestion thinking",
             "file_path": "/path/to/file.py",
             "line": 1,
             "suggestion": "```suggestion\\ncode\\n```",
@@ -214,13 +214,13 @@ class TestSuggestionsResponse:
         }
 
         data = {
-            "thinking": "Overall thinking about suggestions",
+            "reasoning": "Overall thinking about suggestions",
             "suggestions": [suggestion_data],
         }
 
         response = SuggestionsResponse(**data)
 
-        assert response.thinking == "Overall thinking about suggestions"
+        assert response.reasoning == "Overall thinking about suggestions"
         assert len(response.suggestions) == 1
         assert isinstance(response.suggestions[0], Suggestion)
         assert response.suggestions[0].file_path == "/path/to/file.py"
@@ -231,17 +231,17 @@ class TestSuggestionsResponse:
 
     def test_suggestions_response_empty_suggestions(self):
         """Test SuggestionsResponse with empty suggestions list."""
-        data = {"thinking": "No suggestions found", "suggestions": []}
+        data = {"reasoning": "No suggestions found", "suggestions": []}
 
         response = SuggestionsResponse(**data)
 
-        assert response.thinking == "No suggestions found"
+        assert response.reasoning == "No suggestions found"
         assert len(response.suggestions) == 0
 
     def test_suggestions_response_multiple_suggestions(self):
         """Test SuggestionsResponse with multiple suggestions."""
         suggestion1 = {
-            "thinking": "First suggestion thinking",
+            "reasoning": "First suggestion thinking",
             "file_path": "/path/to/file1.py",
             "line": 1,
             "suggestion": "```suggestion\\ncode1\\n```",
@@ -251,7 +251,7 @@ class TestSuggestionsResponse:
         }
 
         suggestion2 = {
-            "thinking": "Second suggestion thinking",
+            "reasoning": "Second suggestion thinking",
             "file_path": "/path/to/file2.py",
             "line": 10,
             "suggestion": "```suggestion\\ncode2\\n```",
@@ -261,13 +261,13 @@ class TestSuggestionsResponse:
         }
 
         data = {
-            "thinking": "Multiple suggestions found",
+            "reasoning": "Multiple suggestions found",
             "suggestions": [suggestion1, suggestion2],
         }
 
         response = SuggestionsResponse(**data)
 
-        assert response.thinking == "Multiple suggestions found"
+        assert response.reasoning == "Multiple suggestions found"
         assert len(response.suggestions) == 2
         assert all(isinstance(s, Suggestion) for s in response.suggestions)
         assert response.suggestions[0].type == "bug"
@@ -281,13 +281,13 @@ class TestSuggestionsResponse:
             SuggestionsResponse(**data)
 
         errors = exc_info.value.errors()
-        thinking_errors = [e for e in errors if e["loc"][0] == "thinking"]
+        thinking_errors = [e for e in errors if e["loc"][0] == "reasoning"]
         assert len(thinking_errors) > 0
         assert thinking_errors[0]["type"] == "missing"
 
     def test_suggestions_response_missing_suggestions(self):
         """Test SuggestionsResponse with missing suggestions field."""
-        data = {"thinking": "Test thinking"}
+        data = {"reasoning": "Test thinking"}
 
         with pytest.raises(ValidationError) as exc_info:
             SuggestionsResponse(**data)
@@ -300,10 +300,10 @@ class TestSuggestionsResponse:
     def test_suggestions_response_invalid_suggestion_item(self):
         """Test SuggestionsResponse with invalid suggestion item."""
         data = {
-            "thinking": "Test thinking",
+            "reasoning": "Test thinking",
             "suggestions": [
                 {
-                    "thinking": "Valid suggestion",
+                    "reasoning": "Valid suggestion",
                     "file_path": "/path/to/file.py",
                     "line": 1,
                     "suggestion": "```suggestion\\ncode\\n```",
@@ -313,7 +313,7 @@ class TestSuggestionsResponse:
                 },
                 {
                     # Missing required fields
-                    "thinking": "Invalid suggestion"
+                    "reasoning": "Invalid suggestion"
                 },
             ],
         }
@@ -331,7 +331,7 @@ class TestSuggestionsResponse:
     def test_suggestions_response_json_serialization(self):
         """Test SuggestionsResponse JSON serialization."""
         suggestion_data = {
-            "thinking": "Individual suggestion thinking",
+            "reasoning": "Individual suggestion thinking",
             "file_path": "/path/to/file.py",
             "line": 1,
             "suggestion": "```suggestion\\ncode\\n```",
@@ -340,12 +340,12 @@ class TestSuggestionsResponse:
             "reason": "Test reason",
         }
 
-        data = {"thinking": "Overall thinking", "suggestions": [suggestion_data]}
+        data = {"reasoning": "Overall thinking", "suggestions": [suggestion_data]}
 
         response = SuggestionsResponse(**data)
         json_data = response.model_dump()
 
-        assert json_data["thinking"] == "Overall thinking"
+        assert json_data["reasoning"] == "Overall thinking"
         assert len(json_data["suggestions"]) == 1
         assert json_data["suggestions"][0] == suggestion_data
 
@@ -356,13 +356,13 @@ class TestLabels:
     def test_labels_valid(self):
         """Test Labels with valid data."""
         data = {
-            "thinking": "These labels apply to the ticket",
+            "reasoning": "These labels apply to the ticket",
             "labels": ["bug", "priority-high", "backend"],
         }
 
         labels = Labels(**data)
 
-        assert labels.thinking == "These labels apply to the ticket"
+        assert labels.reasoning == "These labels apply to the ticket"
         assert labels.labels == ["bug", "priority-high", "backend"]
 
     def test_labels_inherits_thinking(self):
@@ -371,32 +371,32 @@ class TestLabels:
 
     def test_labels_empty_list(self):
         """Test Labels with empty labels list."""
-        data = {"thinking": "No labels needed", "labels": []}
+        data = {"reasoning": "No labels needed", "labels": []}
 
         labels = Labels(**data)
 
-        assert labels.thinking == "No labels needed"
+        assert labels.reasoning == "No labels needed"
         assert labels.labels == []
 
     def test_labels_single_label(self):
         """Test Labels with single label."""
-        data = {"thinking": "Only one label needed", "labels": ["bug"]}
+        data = {"reasoning": "Only one label needed", "labels": ["bug"]}
 
         labels = Labels(**data)
 
-        assert labels.thinking == "Only one label needed"
+        assert labels.reasoning == "Only one label needed"
         assert labels.labels == ["bug"]
 
     def test_labels_max_five_labels(self):
         """Test Labels with exactly five labels."""
         data = {
-            "thinking": "Maximum allowed labels",
+            "reasoning": "Maximum allowed labels",
             "labels": ["bug", "high-priority", "backend", "urgent", "security"],
         }
 
         labels = Labels(**data)
 
-        assert labels.thinking == "Maximum allowed labels"
+        assert labels.reasoning == "Maximum allowed labels"
         assert len(labels.labels) == 5
         assert labels.labels == [
             "bug",
@@ -409,7 +409,7 @@ class TestLabels:
     def test_labels_duplicate_labels(self):
         """Test Labels with duplicate labels (should be allowed by schema but noted in description)."""
         data = {
-            "thinking": "Some duplicate labels",
+            "reasoning": "Some duplicate labels",
             "labels": ["bug", "bug", "priority-high"],
         }
 
@@ -425,13 +425,13 @@ class TestLabels:
             Labels(**data)
 
         errors = exc_info.value.errors()
-        thinking_errors = [e for e in errors if e["loc"][0] == "thinking"]
+        thinking_errors = [e for e in errors if e["loc"][0] == "reasoning"]
         assert len(thinking_errors) > 0
         assert thinking_errors[0]["type"] == "missing"
 
     def test_labels_missing_labels(self):
         """Test Labels with missing labels field."""
-        data = {"thinking": "Test thinking"}
+        data = {"reasoning": "Test thinking"}
 
         with pytest.raises(ValidationError) as exc_info:
             Labels(**data)
@@ -443,7 +443,7 @@ class TestLabels:
 
     def test_labels_invalid_labels_type(self):
         """Test Labels with invalid labels type."""
-        data = {"thinking": "Test thinking", "labels": "not-a-list"}  # Should be list
+        data = {"reasoning": "Test thinking", "labels": "not-a-list"}  # Should be list
 
         with pytest.raises(ValidationError) as exc_info:
             Labels(**data)
@@ -456,7 +456,7 @@ class TestLabels:
     def test_labels_non_string_label_items(self):
         """Test Labels with non-string items in labels list."""
         data = {
-            "thinking": "Test thinking",
+            "reasoning": "Test thinking",
             "labels": [
                 "bug",
                 123,
@@ -473,7 +473,7 @@ class TestLabels:
 
     def test_labels_json_serialization(self):
         """Test Labels JSON serialization."""
-        data = {"thinking": "Test thinking", "labels": ["bug", "priority-high"]}
+        data = {"reasoning": "Test thinking", "labels": ["bug", "priority-high"]}
 
         labels = Labels(**data)
         json_data = labels.model_dump()
@@ -484,12 +484,12 @@ class TestLabels:
         """Test Labels creation from JSON."""
         json_str = """
         {
-            "thinking": "From JSON",
+            "reasoning": "From JSON",
             "labels": ["bug", "json-test"]
         }
         """
 
         labels = Labels.model_validate_json(json_str)
 
-        assert labels.thinking == "From JSON"
+        assert labels.reasoning == "From JSON"
         assert labels.labels == ["bug", "json-test"]
