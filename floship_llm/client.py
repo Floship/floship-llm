@@ -595,6 +595,8 @@ class LLM:
         self._last_raw_response = None
         # Store last structured thinking (from wrapped response_format)
         self._last_structured_thinking = None
+        # Store last native reasoning from extended_thinking API response
+        self._last_native_reasoning = None
 
         # Extended thinking state management
         # Note: _original_extended_thinking and _thinking_auto_disabled are initialized
@@ -633,6 +635,22 @@ class LLM:
             had a thinking field (not wrapped).
         """
         return self._last_structured_thinking
+
+    def get_last_reasoning(self) -> Optional[str]:
+        """Get the reasoning/thinking from the last response.
+
+        This returns Claude's chain-of-thought reasoning from either:
+        1. Native extended_thinking (when include_reasoning=True in API response)
+        2. Pseudo-thinking mode (extracted from <think> tags when native thinking unavailable)
+
+        The reasoning is always stripped from the main response content and stored
+        separately. Use this method to access it.
+
+        Returns:
+            The reasoning string from the last response, or None if no
+            reasoning was captured.
+        """
+        return self._last_native_reasoning
 
     def _validate_environment(self):
         """Validate required environment variables."""
@@ -2443,8 +2461,39 @@ class LLM:
         # Store raw response for debugging (includes thinking tags)
         self._last_raw_response = raw_message
 
-        # Remove thinking tags for the user-facing response
-        message = re.sub(r"<think>.*?</think>", "", raw_message, flags=re.DOTALL)
+        # Extract reasoning from response (native API or pseudo-thinking tags)
+        # When include_reasoning=True, the API returns message.reasoning.thinking
+        # For pseudo-thinking, we extract from <think> tags
+        self._last_native_reasoning = None
+
+        # First check for native reasoning from extended_thinking API response
+        try:
+            reasoning_obj = getattr(choice.message, "reasoning", None)
+            if reasoning_obj is not None:
+                thinking = getattr(reasoning_obj, "thinking", None)
+                if thinking and isinstance(thinking, str):
+                    self._last_native_reasoning = thinking
+                    logger.debug(
+                        f"Native reasoning extracted ({len(self._last_native_reasoning)} chars)"
+                    )
+        except (AttributeError, TypeError):
+            pass  # No native reasoning available
+
+        # If no native reasoning, check for pseudo-thinking <think> tags
+        if not self._last_native_reasoning:
+            thinking_match = re.search(
+                r"<think>(.*?)</think>", raw_message, flags=re.DOTALL
+            )
+            if thinking_match:
+                self._last_native_reasoning = thinking_match.group(1).strip()
+                logger.debug(
+                    f"Pseudo-thinking reasoning extracted ({len(self._last_native_reasoning)} chars)"
+                )
+
+        # Always strip <think> tags from message for clean response
+        message = re.sub(
+            r"<think>.*?</think>", "", raw_message, flags=re.DOTALL
+        ).strip()
 
         # Extract response tags if present
         if "<response>" in message and "</response>" in message:
@@ -2513,8 +2562,21 @@ class LLM:
                 f"Raw streaming response ({len(raw_message)} chars): {raw_message[:500]}..."
             )
 
-        # Remove thinking tags for the user-facing response
-        message = re.sub(r"<think>.*?</think>", "", raw_message, flags=re.DOTALL)
+        # Extract reasoning from pseudo-thinking <think> tags (streaming doesn't have native reasoning)
+        self._last_native_reasoning = None
+        thinking_match = re.search(
+            r"<think>(.*?)</think>", raw_message, flags=re.DOTALL
+        )
+        if thinking_match:
+            self._last_native_reasoning = thinking_match.group(1).strip()
+            logger.debug(
+                f"Pseudo-thinking reasoning extracted ({len(self._last_native_reasoning)} chars)"
+            )
+
+        # Always strip <think> tags from message for clean response
+        message = re.sub(
+            r"<think>.*?</think>", "", raw_message, flags=re.DOTALL
+        ).strip()
 
         # Extract response tags if present
         if "<response>" in message and "</response>" in message:

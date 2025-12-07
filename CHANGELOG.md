@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.42] - 2025-12-07
+
+### Added
+- **`include_reasoning` Support:** Properly captures native reasoning from Heroku API's `message.reasoning.thinking` field when `include_reasoning=True` is passed.
+- **`get_last_reasoning()` Method:** New method to access reasoning/thinking from the last response. Captures from two sources:
+  1. Native extended thinking API response (`message.reasoning.thinking`)
+  2. Pseudo-thinking `<think>` tags when native thinking is unavailable
+
+  ```python
+  response = llm.prompt("Solve 2+2", include_reasoning=True)
+  reasoning = llm.get_last_reasoning()  # Access the reasoning separately
+  ```
+
+### Changed
+- **Reasoning Not Embedded:** Reasoning is no longer embedded in response content. Access it via `get_last_reasoning()` instead for clean separation of content and reasoning.
+
 ## [0.5.41] - 2025-12-07
 
 ### Added
