@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Truncated JSON Detection in Structured Output:** Added proper truncation detection for non-streaming responses with `response_format`. Now raises `TruncatedResponseError` with a clear message suggesting to increase `max_completion_tokens` instead of failing with cryptic Pydantic validation errors.
+- **response_format Reasoning Wrapper Only When Extended Thinking Enabled:** The `ThinkingWrapper` that adds a `reasoning` field to `response_format` schemas is now only applied when `extended_thinking` is enabled. Previously, it was always applied, forcing unnecessary reasoning overhead even when not requested.
 
 ## [0.5.44] - 2025-12-11
 

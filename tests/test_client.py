@@ -130,9 +130,10 @@ class TestLLM:
             assert llm.input_tokens_limit == 20000
             assert llm.max_retry == 5
             assert llm.retry_count == 0
-            # response_format is wrapped, but _original_response_format preserves user's model
+            # response_format is NOT wrapped without extended_thinking
             assert llm._original_response_format == ResponseModelForTesting
-            assert llm._response_format_wrapped is True
+            assert llm._response_format_wrapped is False
+            assert llm.response_format == ResponseModelForTesting
             # System message should be added to messages
             assert len(llm.messages) == 1
             assert llm.messages[0]["role"] == "system"
@@ -663,7 +664,34 @@ class TestLLM:
             assert len(llm.messages) == 0  # Should be reset
 
     def test_prompt_with_response_format(self):
-        """Test prompt with response format returns user's original model type."""
+        """Test prompt with response format returns user's original model type (no wrapping without extended_thinking)."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            # Create mock streaming response with plain JSON (no wrapping since extended_thinking is off)
+            plain_response = '{"name": "test", "value": 42}'
+            mock_openai.return_value.chat.completions.create.return_value = (
+                create_mock_stream_response(plain_response)
+            )
+
+            with patch(
+                "floship_llm.utils.lm_json_utils.extract_strict_json"
+            ) as mock_extract:
+                mock_extract.return_value = plain_response
+
+                llm = LLM(response_format=ResponseModelForTesting)
+                # Clear system message added during init
+                llm.messages = []
+
+                result = llm.prompt("Hello")
+
+                # User gets back their original model type (not wrapped since no extended_thinking)
+                assert isinstance(result, ResponseModelForTesting)
+                assert result.name == "test"
+                assert result.value == 42
+                # No reasoning captured since not wrapped
+                assert llm.get_last_reasoning() is None
+
+    def test_prompt_with_response_format_and_extended_thinking(self):
+        """Test prompt with response format + extended_thinking returns user's original model type (wrapped)."""
         with patch("floship_llm.client.OpenAI") as mock_openai:
             # Create mock streaming response with wrapped JSON content (reasoning + response)
             wrapped_response = '{"reasoning": "Let me create a test record.", "response": {"name": "test", "value": 42}}'
@@ -676,7 +704,10 @@ class TestLLM:
             ) as mock_extract:
                 mock_extract.return_value = wrapped_response
 
-                llm = LLM(response_format=ResponseModelForTesting)
+                llm = LLM(
+                    response_format=ResponseModelForTesting,
+                    extended_thinking={"enabled": True, "budget_tokens": 1024},
+                )
                 # Clear system message added during init
                 llm.messages = []
 
@@ -1167,19 +1198,19 @@ class TestLLM:
             llm = LLM(response_format=ResponseModelForTesting)
 
             mock_choice = Mock()
-            # Mock response contains wrapped format
-            mock_choice.message.content = 'Response: {"reasoning": "Processing request.", "response": {"name": "test", "value": 42}}'
+            # Mock response contains plain format (no wrapping without extended_thinking)
+            mock_choice.message.content = 'Response: {"name": "test", "value": 42}'
             mock_response = Mock()
             mock_response.choices = [mock_choice]
 
             with patch(
                 "floship_llm.utils.lm_json_utils.extract_strict_json"
             ) as mock_extract:
-                mock_extract.return_value = '{"reasoning": "Processing request.", "response": {"name": "test", "value": 42}}'
+                mock_extract.return_value = '{"name": "test", "value": 42}'
 
                 result = llm.process_response(mock_response)
 
-                # User gets back their original model type (unwrapped)
+                # User gets back their original model type (not wrapped)
                 assert isinstance(result, ResponseModelForTesting)
                 assert result.name == "test"
                 assert result.value == 42
@@ -1706,16 +1737,16 @@ class TestLLM:
         """Test chat with structured response format (Pydantic model)."""
         with patch("floship_llm.client.OpenAI") as mock_openai:
             mock_client = mock_openai.return_value
-            # Streaming returns wrapped JSON response
-            wrapped_response = '{"reasoning": "Generating test record.", "response": {"name": "Alice", "value": 100}}'
+            # Streaming returns plain JSON response (no wrapping without extended_thinking)
+            plain_response = '{"name": "Alice", "value": 100}'
             mock_client.chat.completions.create.return_value = (
-                create_mock_stream_response(wrapped_response)
+                create_mock_stream_response(plain_response)
             )
 
             with patch(
                 "floship_llm.utils.lm_json_utils.extract_strict_json"
             ) as mock_extract:
-                mock_extract.return_value = wrapped_response
+                mock_extract.return_value = plain_response
 
                 llm = LLM(
                     response_format=ResponseModelForTesting,
@@ -1725,7 +1756,7 @@ class TestLLM:
 
                 result = llm.chat("Generate a test record")
 
-                # Result should be user's original model type (unwrapped)
+                # Result should be user's original model type (not wrapped)
                 assert isinstance(result, ResponseModelForTesting)
                 assert result.name == "Alice"
                 assert result.value == 100
@@ -2102,17 +2133,30 @@ class TestResponseFormatThinkingWrapper:
         """Clean up test environment."""
         self.env_patcher.stop()
 
-    def test_response_format_auto_wrapped_for_plain_model(self):
-        """Test that plain BaseModel response_format is auto-wrapped with thinking."""
+    def test_response_format_auto_wrapped_when_extended_thinking_enabled(self):
+        """Test that plain BaseModel response_format is auto-wrapped with thinking when extended_thinking is enabled."""
         with patch("floship_llm.client.OpenAI"):
-            llm = LLM(response_format=ResponseModelForTesting)
+            llm = LLM(
+                response_format=ResponseModelForTesting,
+                extended_thinking={"enabled": True, "budget_tokens": 1024},
+            )
 
-            # Should be wrapped
+            # Should be wrapped because extended_thinking is enabled
             assert llm._response_format_wrapped is True
             assert llm._original_response_format == ResponseModelForTesting
             # Wrapper should have reasoning and response fields
             assert "reasoning" in llm.response_format.model_fields
             assert "response" in llm.response_format.model_fields
+
+    def test_response_format_not_wrapped_without_extended_thinking(self):
+        """Test that plain BaseModel response_format is NOT wrapped when extended_thinking is disabled."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(response_format=ResponseModelForTesting)
+
+            # Should NOT be wrapped because extended_thinking is not enabled
+            assert llm._response_format_wrapped is False
+            assert llm._original_response_format == ResponseModelForTesting
+            assert llm.response_format == ResponseModelForTesting
 
     def test_response_format_not_wrapped_for_thinking_model(self):
         """Test that ThinkingModel subclass is NOT wrapped."""
@@ -2141,7 +2185,10 @@ class TestResponseFormatThinkingWrapper:
     def test_unwrap_thinking_response_extracts_user_model(self):
         """Test _unwrap_thinking_response returns user's original model type."""
         with patch("floship_llm.client.OpenAI"):
-            llm = LLM(response_format=ResponseModelForTesting)
+            llm = LLM(
+                response_format=ResponseModelForTesting,
+                extended_thinking={"enabled": True, "budget_tokens": 1024},
+            )
 
             # Create a mock wrapped response
             wrapped = llm.response_format(
@@ -2188,14 +2235,20 @@ class TestResponseFormatThinkingWrapper:
     def test_get_last_structured_thinking_none_initially(self):
         """Test get_last_reasoning returns None before any response."""
         with patch("floship_llm.client.OpenAI"):
-            llm = LLM(response_format=ResponseModelForTesting)
+            llm = LLM(
+                response_format=ResponseModelForTesting,
+                extended_thinking={"enabled": True, "budget_tokens": 1024},
+            )
 
             assert llm.get_last_reasoning() is None
 
     def test_wrapper_schema_has_correct_structure(self):
         """Test that the wrapper schema has reasoning first, then response."""
         with patch("floship_llm.client.OpenAI"):
-            llm = LLM(response_format=ResponseModelForTesting)
+            llm = LLM(
+                response_format=ResponseModelForTesting,
+                extended_thinking={"enabled": True, "budget_tokens": 1024},
+            )
 
             schema = llm.response_format.model_json_schema()
 

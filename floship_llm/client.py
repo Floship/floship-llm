@@ -1244,17 +1244,40 @@ class LLM:
         # Check if it has a 'reasoning' field defined
         return "reasoning" in model.model_fields
 
+    def _is_extended_thinking_enabled(self) -> bool:
+        """
+        Check if extended_thinking is enabled.
+
+        Returns True if extended_thinking is set and enabled.
+        """
+        if not self.extended_thinking:
+            return False
+        if isinstance(self.extended_thinking, dict):
+            return self.extended_thinking.get("enabled", False)
+        return bool(self.extended_thinking)
+
     def _ensure_thinking_in_response_format(self) -> None:
         """
-        Wrap response_format with a reasoning field if it doesn't already have one.
+        Wrap response_format with a reasoning field if extended_thinking is enabled.
 
-        This ensures Claude always provides chain-of-thought reasoning in structured output,
-        even when the user's model doesn't extend ThinkingModel.
+        Only wraps when extended_thinking is enabled.
+        This ensures Claude provides chain-of-thought reasoning in structured output
+        when extended thinking is requested.
 
         If the model already has a reasoning field, extended_thinking is disabled to avoid
         redundancy (schema-based reasoning takes precedence over native extended thinking).
         """
         if not self._original_response_format:
+            return
+
+        # Only wrap if extended_thinking is enabled
+        if not self._is_extended_thinking_enabled():
+            logger.debug(
+                "Not wrapping response_format with reasoning - "
+                "extended_thinking not enabled"
+            )
+            self.response_format = self._original_response_format
+            self._response_format_wrapped = False
             return
 
         if self._has_thinking_field(self._original_response_format):
