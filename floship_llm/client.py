@@ -2526,8 +2526,38 @@ class LLM:
         # Handle structured output
         if self.require_response_format:
             logger.info(f"Original message: {message}")
+
+            # Check for truncated JSON before attempting extraction
+            if lm_json_utils.is_truncated_json(message):
+                logger.warning(
+                    f"Detected truncated JSON response (likely max_completion_tokens too low). "
+                    f"Response ends with: ...{message[-100:]}"
+                )
+                raise TruncatedResponseError(
+                    "Response appears truncated - JSON is incomplete. "
+                    "Consider increasing max_completion_tokens.",
+                    raw_response=message,
+                )
+
             json_message = lm_json_utils.extract_strict_json(message)
             logger.info(f"Parsed message: {json_message}")
+
+            if not json_message:
+                logger.warning(
+                    f"Failed to extract JSON from response. "
+                    f"Response was: {message[:500]}..."
+                )
+                # Return empty model with defaults rather than failing
+                try:
+                    default_model = self.response_format()
+                    return self._unwrap_thinking_response(default_model)
+                except Exception as e:
+                    logger.error(f"Failed to create default model: {e}")
+                    raise ValueError(
+                        f"Could not extract valid JSON from LLM response. "
+                        f"Raw response: {message[:200]}..."
+                    )
+
             parsed = self.response_format.model_validate_json(json_message)
             return self._unwrap_thinking_response(parsed)
 

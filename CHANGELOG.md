@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.45] - 2025-12-11
+
+### Fixed
+- **Truncated JSON Detection in Structured Output:** Added proper truncation detection for non-streaming responses with `response_format`. Now raises `TruncatedResponseError` with a clear message suggesting to increase `max_completion_tokens` instead of failing with cryptic Pydantic validation errors.
+
 ## [0.5.44] - 2025-12-11
 
 ### Fixed
