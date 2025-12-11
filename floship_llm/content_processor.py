@@ -1,5 +1,7 @@
 """Content processing for tool responses and messages."""
 
+from __future__ import annotations
+
 import logging
 import re
 from typing import Dict, Optional, Tuple

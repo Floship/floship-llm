@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.44] - 2025-12-11
+
+### Fixed
+- **Python 3.8 Compatibility:** Added `from __future__ import annotations` to all modules to support Python 3.8+ by deferring annotation evaluation (PEP 563). This fixes `TypeError: unsupported operand type(s) for |` errors when importing on Python 3.8/3.9.
+
 ## [0.5.42] - 2025-12-07
 
 ### Added

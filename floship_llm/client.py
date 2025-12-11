@@ -1,5 +1,7 @@
 """Main LLM client for inference with tool support."""
 
+from __future__ import annotations
+
 import json
 import logging
 import os

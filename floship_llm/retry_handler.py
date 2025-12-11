@@ -1,5 +1,7 @@
 """Retry logic for API calls with exponential backoff."""
 
+from __future__ import annotations
+
 import logging
 import time
 from typing import Any, Callable

@@ -3,6 +3,8 @@
 A reusable LLM client library for interacting with OpenAI-compatible inference endpoints.
 """
 
+from __future__ import annotations
+
 from .client import (
     LLM,
     CloudFrontWAFError,
