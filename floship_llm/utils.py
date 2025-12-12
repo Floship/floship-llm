@@ -98,44 +98,53 @@ class JSONUtils:
         error, escape the quote at the error position and try again.
         """
         result = candidate
-        max_attempts = 50  # Prevent infinite loops
+        max_attempts = 100  # Increased for very long content with many quotes
 
-        for _ in range(max_attempts):
+        for _attempt in range(max_attempts):
             try:
                 json.loads(result)
                 return result  # Success!
             except json.JSONDecodeError as e:
+                error_msg = str(e)
                 # Check if error is quote-related
-                if "Expecting ',' delimiter" in str(e) or "Expecting ':'" in str(e):
+                if (
+                    "Expecting ',' delimiter" in error_msg
+                    or "Expecting ':'" in error_msg
+                    or "Expecting property name" in error_msg
+                ):
                     # The error position points to where JSON expected something else
                     # The unescaped quote is likely just before this position
-                    # Find the quote before the error position
                     pos = e.pos
-                    # Look backwards for the problematic quote
-                    search_start = max(0, pos - 50)
-                    search_area = result[search_start:pos]
 
-                    # Find the last unescaped quote in the search area
-                    last_quote_pos = -1
-                    i = len(search_area) - 1
-                    while i >= 0:
-                        if search_area[i] == '"':
+                    # Strategy 1: Look for quote right before the error position
+                    # The error usually occurs at the character AFTER the problematic quote
+                    if pos > 0 and result[pos - 1] == '"':
+                        # Check if this quote is already escaped
+                        if pos < 2 or result[pos - 2] != "\\":
+                            result = result[: pos - 1] + '\\"' + result[pos:]
+                            continue
+
+                    # Strategy 2: Look backwards for the most recent unescaped quote
+                    search_start = max(0, pos - 100)
+                    found = False
+                    for i in range(pos - 1, search_start - 1, -1):
+                        if result[i] == '"':
                             # Check if escaped
-                            if i > 0 and search_area[i - 1] == "\\":
-                                i -= 1
+                            if i > 0 and result[i - 1] == "\\":
                                 continue
-                            last_quote_pos = search_start + i
+                            # Found unescaped quote - escape it
+                            result = result[:i] + '\\"' + result[i + 1 :]
+                            found = True
                             break
-                        i -= 1
 
-                    if last_quote_pos > 0:
-                        # Escape this quote
-                        result = (
-                            result[:last_quote_pos]
-                            + '\\"'
-                            + result[last_quote_pos + 1 :]
-                        )
+                    if found:
                         continue
+
+                    # Strategy 3: Look at the exact error position - might be an issue there
+                    if pos < len(result) and result[pos] == '"':
+                        if pos == 0 or result[pos - 1] != "\\":
+                            result = result[:pos] + '\\"' + result[pos + 1 :]
+                            continue
 
                 # Can't fix this error
                 return candidate

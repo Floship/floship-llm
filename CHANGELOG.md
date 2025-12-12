@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.49] - 2025-12-12
+
+### Fixed
+- **Improved Unescaped Quote Detection:** Enhanced `_fix_unescaped_quotes_in_strings()` with multiple detection strategies and increased max attempts (100) to handle long content with many unescaped quotes. Now also handles "Expecting property name" errors in addition to delimiter errors.
+
 ## [0.5.48] - 2025-12-12
 
 ### Fixed

@@ -230,6 +230,54 @@ AMAI
         assert len(result) == 1
         assert result[0] == {"title": 'Festival "Atspindys" ended'}
 
+    def test_extract_and_fix_json_with_european_content(self):
+        """Test extraction of JSON with european content and special quotes."""
+        utils = JSONUtils()
+
+        # european uses special quotes: „" (U+201E and U+201C)
+        # These should NOT interfere with JSON parsing
+        text = '{"content": "Nuotekų tvarkymas lieka „nematomoje" miesto pusėje."}'
+        result = utils.extract_and_fix_json(text)
+
+        assert len(result) == 1
+        assert "nematomoje" in result[0]["content"]
+
+    def test_extract_and_fix_json_with_many_unescaped_quotes(self):
+        """Test extraction of JSON with many unescaped ASCII quotes."""
+        utils = JSONUtils()
+
+        # Multiple unescaped quotes throughout the content
+        text = """{"content": "He said "hello" and she replied "goodbye" then "see you" later"}"""
+        result = utils.extract_and_fix_json(text)
+
+        assert len(result) == 1
+        assert (
+            result[0]["content"]
+            == 'He said "hello" and she replied "goodbye" then "see you" later'
+        )
+
+    def test_extract_and_fix_json_with_european_special_quotes(self):
+        """Test extraction of JSON with european special quotes („")."""
+        utils = JSONUtils()
+
+        # european uses special quotes „" (U+201E and U+201C)
+        # These should NOT interfere with JSON parsing
+        text = """```json
+{
+  "title": "Sample Title",
+  "description": "A brief description of the content.",
+  "content": "# Main Heading\\n\\n## Section 1\\n\\nThis text contains „special quotes" that are common in european. The system should handle these properly without confusing them with JSON delimiters.\\n\\n## Section 2\\n\\nMore content with numbers — 70 km, 2750 m³, and statistics.\\n\\nThis shows how the parser handles mixed content."
+}
+```"""
+        result = utils.extract_and_fix_json(text)
+
+        assert len(result) == 1
+        assert result[0]["title"] == "Sample Title"
+        assert "brief description" in result[0]["description"]
+        assert "Main Heading" in result[0]["content"]
+        # Verify european special quotes are preserved
+        assert "special quotes" in result[0]["content"]
+
     def test_normalize_combined_issues(self):
         """Test normalization with multiple issues combined."""
         utils = JSONUtils()
