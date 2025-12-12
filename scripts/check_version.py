@@ -44,7 +44,7 @@ def get_changelog_version() -> str | None:
         return None
     content = changelog.read_text()
     # Find first version header after [Unreleased]
-    match = re.search(r'## \[(\d+\.\d+\.\d+)\]', content)
+    match = re.search(r"## \[(\d+\.\d+\.\d+)\]", content)
     return match.group(1) if match else None
 
 
@@ -84,7 +84,11 @@ def main() -> int:
             f"❌ Version mismatch: pyproject.toml ({pyproject_version}) != __init__.py ({init_version})"
         )
 
-    if pyproject_version and changelog_version and pyproject_version != changelog_version:
+    if (
+        pyproject_version
+        and changelog_version
+        and pyproject_version != changelog_version
+    ):
         errors.append(
             f"❌ Version mismatch: pyproject.toml ({pyproject_version}) != CHANGELOG.md ({changelog_version})"
         )

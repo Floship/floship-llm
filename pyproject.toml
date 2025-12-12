@@ -100,6 +100,9 @@ ignore = [
     "ARG001",   # unused function argument
     "ARG002",   # unused method argument
     "ARG003",   # unused class method argument
+    "UP006",    # use modern type annotations (list instead of List) - keep for Python 3.8 compat readability
+    "UP007",    # use X | Y instead of Union - keep for Python 3.8 compat readability
+    "UP045",    # use X | None instead of Optional - keep for Python 3.8 compat readability
 ]
 
 [tool.ruff.lint.per-file-ignores]

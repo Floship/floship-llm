@@ -2579,6 +2579,7 @@ class LLM:
                         "Structured output parsing failed; returning raw text because "
                         "allow_response_format_fallback=True"
                     )
+                    logger.warning(f"Returning raw message: {message}")
                     return message
                 # Return empty model with defaults rather than failing
                 try:
@@ -2712,6 +2713,7 @@ class LLM:
                         "Structured output parsing failed; returning raw text because "
                         "allow_response_format_fallback=True"
                     )
+                    logger.warning(f"Returning raw message: {message}")
                     return message
                 # Return empty model with defaults rather than failing
                 try:
