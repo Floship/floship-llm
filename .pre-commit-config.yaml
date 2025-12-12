@@ -100,6 +100,12 @@ repos:
   # UV lock file sync - ensure uv.lock is up to date with pyproject.toml
   - repo: local
     hooks:
+      - id: check-version-consistency
+        name: 🔢 Check version consistency
+        entry: python scripts/check_version.py
+        language: system
+        files: ^(pyproject\.toml|floship_llm/__init__\.py|tests/test_init\.py|CHANGELOG\.md)$
+        pass_filenames: false
       - id: uv-lock-check
         name: Check uv.lock is in sync with pyproject.toml
         entry: uv lock --check
