@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.48] - 2025-12-12
+
+### Fixed
+- **JSON Parsing with Unescaped Quotes:** Fixed JSON parsing failure when LLMs output unescaped double quotes inside JSON string values. Added `_fix_unescaped_quotes_in_strings()` method that iteratively identifies and escapes problematic quotes based on JSON parse errors. This resolves "Expecting ',' delimiter" errors when parsing LLM-generated JSON with embedded quotes like `"Festival "Name" here"`.
+
 ## [0.5.47] - 2025-12-12
 
 ### Fixed

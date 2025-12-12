@@ -177,6 +177,59 @@ AMAI
         assert len(result) == 1
         assert "LAIKRAŠTIS PLATINAMAS NEMOK\nAMAI" in result[0]["content_lt"]
 
+    def test_fix_unescaped_quotes_basic(self):
+        """Test fixing unescaped double quotes inside JSON strings."""
+        utils = JSONUtils()
+
+        # Quote followed by non-delimiter character should be escaped
+        input_str = '{"key": "value with "quote" inside"}'
+        result = utils._fix_unescaped_quotes_in_strings(input_str)
+        assert result == '{"key": "value with \\"quote\\" inside"}'
+
+    def test_fix_unescaped_quotes_at_word_boundary(self):
+        """Test that quotes at word boundaries are handled correctly."""
+        utils = JSONUtils()
+
+        # Quote followed by space should be preserved (end of string)
+        input_str = '{"key": "test"}'
+        result = utils._fix_unescaped_quotes_in_strings(input_str)
+        assert result == '{"key": "test"}'
+
+    def test_fix_unescaped_quotes_multiple(self):
+        """Test fixing multiple unescaped quotes."""
+        utils = JSONUtils()
+
+        input_str = '{"key": "the "quick" brown "fox" jumps"}'
+        result = utils._fix_unescaped_quotes_in_strings(input_str)
+        assert result == '{"key": "the \\"quick\\" brown \\"fox\\" jumps"}'
+
+    def test_fix_unescaped_quotes_preserves_escaped(self):
+        """Test that already escaped quotes are not double-escaped."""
+        utils = JSONUtils()
+
+        input_str = '{"key": "value with \\"escaped\\" quote"}'
+        result = utils._fix_unescaped_quotes_in_strings(input_str)
+        assert result == '{"key": "value with \\"escaped\\" quote"}'
+
+    def test_fix_unescaped_quotes_json_structure(self):
+        """Test that JSON structural quotes are preserved."""
+        utils = JSONUtils()
+
+        input_str = '{"key1": "value1", "key2": "value2"}'
+        result = utils._fix_unescaped_quotes_in_strings(input_str)
+        assert result == '{"key1": "value1", "key2": "value2"}'
+
+    def test_extract_and_fix_json_with_unescaped_quotes(self):
+        """Test extraction of JSON with unescaped quotes in string values."""
+        utils = JSONUtils()
+
+        # This simulates LLM output with unescaped quotes in JSON strings
+        text = 'Text {"title": "Festival "Atspindys" ended"} end'
+        result = utils.extract_and_fix_json(text)
+
+        assert len(result) == 1
+        assert result[0] == {"title": 'Festival "Atspindys" ended'}
+
     def test_normalize_combined_issues(self):
         """Test normalization with multiple issues combined."""
         utils = JSONUtils()

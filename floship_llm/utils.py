@@ -90,6 +90,58 @@ class JSONUtils:
 
         return "".join(result)
 
+    def _fix_unescaped_quotes_in_strings(self, candidate: str) -> str:
+        """
+        Attempt to fix unescaped double quotes inside JSON string values.
+
+        This uses an iterative approach: try to parse, and if we get a quote-related
+        error, escape the quote at the error position and try again.
+        """
+        result = candidate
+        max_attempts = 50  # Prevent infinite loops
+
+        for _ in range(max_attempts):
+            try:
+                json.loads(result)
+                return result  # Success!
+            except json.JSONDecodeError as e:
+                # Check if error is quote-related
+                if "Expecting ',' delimiter" in str(e) or "Expecting ':'" in str(e):
+                    # The error position points to where JSON expected something else
+                    # The unescaped quote is likely just before this position
+                    # Find the quote before the error position
+                    pos = e.pos
+                    # Look backwards for the problematic quote
+                    search_start = max(0, pos - 50)
+                    search_area = result[search_start:pos]
+
+                    # Find the last unescaped quote in the search area
+                    last_quote_pos = -1
+                    i = len(search_area) - 1
+                    while i >= 0:
+                        if search_area[i] == '"':
+                            # Check if escaped
+                            if i > 0 and search_area[i - 1] == "\\":
+                                i -= 1
+                                continue
+                            last_quote_pos = search_start + i
+                            break
+                        i -= 1
+
+                    if last_quote_pos > 0:
+                        # Escape this quote
+                        result = (
+                            result[:last_quote_pos]
+                            + '\\"'
+                            + result[last_quote_pos + 1 :]
+                        )
+                        continue
+
+                # Can't fix this error
+                return candidate
+
+        return candidate  # Give up after max attempts
+
     def _normalize(self, candidate: str) -> str:
         """Apply all cleanup regexes in sequence."""
         s = candidate
@@ -105,17 +157,32 @@ class JSONUtils:
         The method tries multiple parsing strategies in order:
         1. Raw JSON as-is
         2. JSON with escaped newlines in strings (LLMs often output literal newlines)
-        3. Normalized JSON (various fixes like single quotes -> double quotes)
-        4. Escaped newlines + normalized JSON
+        3. JSON with fixed unescaped quotes in strings
+        4. Normalized JSON (various fixes like single quotes -> double quotes)
+        5. Escaped newlines + normalized JSON
+        6. Fixed quotes + normalized JSON
+        7. All fixes combined
         """
         results = []
         for m in self.JSON_CANDIDATE.finditer(text):
             raw = m.group("json")
             escaped = self._escape_newlines_in_strings(raw)
+            fixed_quotes = self._fix_unescaped_quotes_in_strings(raw)
             normalized = self._normalize(raw)
             escaped_normalized = self._normalize(escaped)
+            fixed_quotes_normalized = self._normalize(fixed_quotes)
+            # All fixes: escape newlines first, then fix quotes, then normalize
+            all_fixes = self._normalize(self._fix_unescaped_quotes_in_strings(escaped))
 
-            candidates = [raw, escaped, normalized, escaped_normalized]
+            candidates = [
+                raw,
+                escaped,
+                fixed_quotes,
+                normalized,
+                escaped_normalized,
+                fixed_quotes_normalized,
+                all_fixes,
+            ]
 
             seen = set()
             for candidate in candidates:
