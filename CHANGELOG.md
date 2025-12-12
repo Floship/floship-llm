@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.47] - 2025-12-12
+
+### Fixed
+- **JSON Parsing with Literal Newlines:** Fixed JSON parsing failure when LLMs output literal newlines inside JSON string values (instead of escaped `\n`). Added `_escape_newlines_in_strings()` method that properly escapes literal newlines, carriage returns, and tabs inside JSON strings before parsing. This resolves "Expecting property name enclosed in double quotes" errors when parsing LLM-generated JSON with unescaped control characters in string values.
+
 ## [0.5.46] - 2025-12-12
 
 ### Fixed

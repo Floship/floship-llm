@@ -61,8 +61,121 @@ class TestJSONUtils:
         utils = JSONUtils()
 
         # Test various control characters - use actual control characters, not escape sequences
+        # Note: newlines (\x0a) are NOT removed by normalize, they are handled separately
         result = utils._normalize('{"key": "value\x00\x01\x1f"}')
         assert result == '{"key": "value"}'
+
+    def test_escape_newlines_in_strings_basic(self):
+        """Test escaping literal newlines inside JSON strings."""
+        utils = JSONUtils()
+
+        # Test with literal newline inside a string value
+        input_str = '{"key": "line1\nline2"}'
+        result = utils._escape_newlines_in_strings(input_str)
+        assert result == '{"key": "line1\\nline2"}'
+
+    def test_escape_newlines_in_strings_multiple(self):
+        """Test escaping multiple literal newlines."""
+        utils = JSONUtils()
+
+        input_str = '{"key": "line1\nline2\nline3"}'
+        result = utils._escape_newlines_in_strings(input_str)
+        assert result == '{"key": "line1\\nline2\\nline3"}'
+
+    def test_escape_newlines_in_strings_carriage_return(self):
+        """Test escaping literal carriage returns."""
+        utils = JSONUtils()
+
+        input_str = '{"key": "line1\rline2"}'
+        result = utils._escape_newlines_in_strings(input_str)
+        assert result == '{"key": "line1\\rline2"}'
+
+    def test_escape_newlines_in_strings_crlf(self):
+        """Test escaping CRLF sequences."""
+        utils = JSONUtils()
+
+        input_str = '{"key": "line1\r\nline2"}'
+        result = utils._escape_newlines_in_strings(input_str)
+        assert result == '{"key": "line1\\r\\nline2"}'
+
+    def test_escape_newlines_in_strings_tabs(self):
+        """Test escaping literal tabs."""
+        utils = JSONUtils()
+
+        input_str = '{"key": "col1\tcol2"}'
+        result = utils._escape_newlines_in_strings(input_str)
+        assert result == '{"key": "col1\\tcol2"}'
+
+    def test_escape_newlines_in_strings_already_escaped(self):
+        """Test that already escaped sequences are not double-escaped."""
+        utils = JSONUtils()
+
+        # Already properly escaped - should remain unchanged
+        input_str = '{"key": "line1\\nline2"}'
+        result = utils._escape_newlines_in_strings(input_str)
+        assert result == '{"key": "line1\\nline2"}'
+
+    def test_escape_newlines_in_strings_outside_strings(self):
+        """Test that newlines outside strings are preserved as-is."""
+        utils = JSONUtils()
+
+        # Newlines in JSON structure (not in string values) should be preserved
+        input_str = '{\n"key": "value"\n}'
+        result = utils._escape_newlines_in_strings(input_str)
+        assert result == '{\n"key": "value"\n}'
+
+    def test_escape_newlines_in_strings_nested_objects(self):
+        """Test escaping newlines in nested objects."""
+        utils = JSONUtils()
+
+        input_str = '{"outer": {"inner": "line1\nline2"}}'
+        result = utils._escape_newlines_in_strings(input_str)
+        assert result == '{"outer": {"inner": "line1\\nline2"}}'
+
+    def test_escape_newlines_in_strings_arrays(self):
+        """Test escaping newlines in arrays."""
+        utils = JSONUtils()
+
+        input_str = '["item1\nwith\nnewlines", "item2"]'
+        result = utils._escape_newlines_in_strings(input_str)
+        assert result == '["item1\\nwith\\nnewlines", "item2"]'
+
+    def test_escape_newlines_preserves_escaped_quotes(self):
+        """Test that escaped quotes inside strings are handled correctly."""
+        utils = JSONUtils()
+
+        # String with escaped quote followed by newline
+        input_str = '{"key": "quote: \\" newline:\ntab:\t"}'
+        result = utils._escape_newlines_in_strings(input_str)
+        assert result == '{"key": "quote: \\" newline:\\ntab:\\t"}'
+
+    def test_extract_and_fix_json_with_literal_newlines(self):
+        """Test extraction of JSON with literal newlines in string values."""
+        utils = JSONUtils()
+
+        # This simulates LLM output with literal newlines in JSON strings
+        text = 'Text {"content_lt": "LAIKRAŠTIS PLATINAMAS NEMOK\nAMAI"} end'
+        result = utils.extract_and_fix_json(text)
+
+        assert len(result) == 1
+        assert result[0] == {"content_lt": "LAIKRAŠTIS PLATINAMAS NEMOK\nAMAI"}
+
+    def test_extract_and_fix_json_complex_llm_output(self):
+        """Test extraction of complex JSON with multiple issues from LLM output."""
+        utils = JSONUtils()
+
+        # Simulating LLM output with literal newlines
+        text = """Here's the translation:
+```json
+{"content_lt": "## LAIKRAŠTIS PLATINAMAS NEMOK
+AMAI
+
+Šis laikraštis platinamas nemokamai."}
+```"""
+        result = utils.extract_and_fix_json(text)
+
+        assert len(result) == 1
+        assert "LAIKRAŠTIS PLATINAMAS NEMOK\nAMAI" in result[0]["content_lt"]
 
     def test_normalize_combined_issues(self):
         """Test normalization with multiple issues combined."""

@@ -29,8 +29,66 @@ class JSONUtils:
         ),
         (re.compile(r",\s*(?P<brace>[}\]])"), r"\g<brace>"),
         (re.compile(r"\\'"), "'"),
-        (re.compile(r"[\x00-\x1f]"), ""),
+        # Remove control characters except newlines (handled separately)
+        (re.compile(r"[\x00-\x09\x0b\x0c\x0e-\x1f]"), ""),
     ]
+
+    def _escape_newlines_in_strings(self, candidate: str) -> str:
+        """
+        Escape literal newlines inside JSON string values.
+
+        LLMs sometimes output actual newlines inside JSON strings instead of
+        escaped \\n sequences. This method finds all string values and escapes
+        any literal newlines within them.
+        """
+        result = []
+        i = 0
+        in_string = False
+        escape_next = False
+
+        while i < len(candidate):
+            char = candidate[i]
+
+            if escape_next:
+                result.append(char)
+                escape_next = False
+                i += 1
+                continue
+
+            if char == "\\":
+                result.append(char)
+                escape_next = True
+                i += 1
+                continue
+
+            if char == '"':
+                in_string = not in_string
+                result.append(char)
+                i += 1
+                continue
+
+            if in_string and char == "\n":
+                # Escape literal newline inside string
+                result.append("\\n")
+                i += 1
+                continue
+
+            if in_string and char == "\r":
+                # Escape literal carriage return inside string
+                result.append("\\r")
+                i += 1
+                continue
+
+            if in_string and char == "\t":
+                # Escape literal tab inside string
+                result.append("\\t")
+                i += 1
+                continue
+
+            result.append(char)
+            i += 1
+
+        return "".join(result)
 
     def _normalize(self, candidate: str) -> str:
         """Apply all cleanup regexes in sequence."""
@@ -43,11 +101,21 @@ class JSONUtils:
         """
         Find JSON-like fragments in `text`, attempt to clean and parse them,
         return a list of Python objects. Invalid fragments are skipped.
+
+        The method tries multiple parsing strategies in order:
+        1. Raw JSON as-is
+        2. JSON with escaped newlines in strings (LLMs often output literal newlines)
+        3. Normalized JSON (various fixes like single quotes -> double quotes)
+        4. Escaped newlines + normalized JSON
         """
         results = []
         for m in self.JSON_CANDIDATE.finditer(text):
             raw = m.group("json")
-            candidates = [raw, self._normalize(raw)]
+            escaped = self._escape_newlines_in_strings(raw)
+            normalized = self._normalize(raw)
+            escaped_normalized = self._normalize(escaped)
+
+            candidates = [raw, escaped, normalized, escaped_normalized]
 
             seen = set()
             for candidate in candidates:

@@ -56,4 +56,4 @@ __all__ = [
     "lm_json_utils",
 ]
 
-__version__ = "0.5.46"
+__version__ = "0.5.47"
