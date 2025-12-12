@@ -110,3 +110,23 @@ class TestStreamingProcessing:
 
         with pytest.raises(ValueError, match="Could not extract valid JSON"):
             llm._process_streaming_response(response)
+
+    def test_process_streaming_response_invalid_json_with_fallback(self, llm):
+        """Return raw text when fallback flag is enabled."""
+        llm.response_format = ResponseModelForTesting
+        llm.allow_response_format_fallback = True
+        response = "Not JSON at all"
+
+        result = llm._process_streaming_response(response)
+
+        assert result == response
+
+    def test_process_streaming_response_validation_error_with_fallback(self, llm):
+        """Return raw text when JSON parses but schema validation fails."""
+        llm.response_format = ResponseModelForTesting
+        llm.allow_response_format_fallback = True
+        response = '{"name": "test"}'  # missing required field `value`
+
+        result = llm._process_streaming_response(response)
+
+        assert result == response

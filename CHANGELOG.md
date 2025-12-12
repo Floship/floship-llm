@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.46] - 2025-12-12
+
+### Fixed
+- **Improved Truncated JSON Detection:** Fixed detection of truncated responses wrapped in incomplete markdown code blocks (e.g., ` ```json\n{...` without closing ` ``` `). Now correctly detects truncation by checking for odd number of code fences and incomplete JSON within code blocks.
+
 ## [0.5.45] - 2025-12-11
 
 ### Fixed

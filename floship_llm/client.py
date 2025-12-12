@@ -440,6 +440,7 @@ class LLM:
             max_length: Maximum response length (default: 100,000)
             input_tokens_limit: Maximum input tokens (default: 40,000)
             max_retry: Maximum retry attempts (default: 3)
+            allow_response_format_fallback: Return raw text when structured output parsing fails (default: False)
             system: System prompt
             enable_tools: Enable tool calling (default: False)
             sanitize_tool_responses: Sanitize tool responses (default: True)
@@ -551,6 +552,9 @@ class LLM:
             raise ValueError(
                 "response_format must be a subclass of BaseModel (pydantic)"
             )
+        self.allow_response_format_fallback = kwargs.get(
+            "allow_response_format_fallback", False
+        )
         # Auto-wrap response_format with thinking field if needed
         if self.response_format:
             self._ensure_thinking_in_response_format()
@@ -2570,6 +2574,12 @@ class LLM:
                     f"Failed to extract JSON from response. "
                     f"Response was: {message[:500]}..."
                 )
+                if self.allow_response_format_fallback:
+                    logger.warning(
+                        "Structured output parsing failed; returning raw text because "
+                        "allow_response_format_fallback=True"
+                    )
+                    return message
                 # Return empty model with defaults rather than failing
                 try:
                     default_model = self.response_format()
@@ -2581,7 +2591,17 @@ class LLM:
                         f"Raw response: {message[:200]}..."
                     )
 
-            parsed = self.response_format.model_validate_json(json_message)
+            try:
+                parsed = self.response_format.model_validate_json(json_message)
+            except Exception as parse_error:
+                if self.allow_response_format_fallback:
+                    logger.warning(
+                        "Structured output validation failed; returning raw text because "
+                        "allow_response_format_fallback=True: %s",
+                        parse_error,
+                    )
+                    return message
+                raise
             return self._unwrap_thinking_response(parsed)
 
         return response.choices[0].message.content
@@ -2687,6 +2707,12 @@ class LLM:
                     f"Failed to extract JSON from response. "
                     f"Response was: {message[:500]}..."
                 )
+                if self.allow_response_format_fallback:
+                    logger.warning(
+                        "Structured output parsing failed; returning raw text because "
+                        "allow_response_format_fallback=True"
+                    )
+                    return message
                 # Return empty model with defaults rather than failing
                 try:
                     default_model = self.response_format()
@@ -2698,7 +2724,17 @@ class LLM:
                         f"Raw response: {message[:200]}..."
                     )
 
-            parsed = self.response_format.model_validate_json(json_message)
+            try:
+                parsed = self.response_format.model_validate_json(json_message)
+            except Exception as parse_error:
+                if self.allow_response_format_fallback:
+                    logger.warning(
+                        "Structured output validation failed; returning raw text because "
+                        "allow_response_format_fallback=True: %s",
+                        parse_error,
+                    )
+                    return message
+                raise
             return self._unwrap_thinking_response(parsed)
 
         return message

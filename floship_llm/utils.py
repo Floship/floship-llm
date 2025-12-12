@@ -120,14 +120,28 @@ class JSONUtils:
         Returns:
             True if the text appears to contain truncated JSON
         """
-        # Check markdown code blocks first
         import re
 
+        # Check for incomplete markdown code blocks (opening ``` without closing ```)
+        # This is a common truncation pattern when response is cut off
+        total_fences = text.count("```")
+        if total_fences % 2 == 1:  # Odd number of fences = unclosed block
+            return True
+
+        # Check complete markdown code blocks
         code_block_pattern = r"```(?:json)?\s*([\s\S]*?)```"
         code_blocks = re.findall(code_block_pattern, text)
 
         for block in code_blocks:
             if self._is_likely_truncated(block.strip()):
+                return True
+
+        # Extract content from incomplete code block if present
+        # (handles case where there's content after opening fence but no closing)
+        incomplete_block_match = re.search(r"```(?:json)?\s*([\s\S]*)$", text)
+        if incomplete_block_match and total_fences == 1:
+            block_content = incomplete_block_match.group(1).strip()
+            if block_content and self._is_likely_truncated(block_content):
                 return True
 
         # Also check the raw text for JSON-like content
