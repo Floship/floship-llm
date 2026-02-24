@@ -263,6 +263,19 @@ class CloudFrontWAFSanitizer:
             # Django ORM filter=Q patterns that look like SQL injection
             (r"filter\s*=\s*Q\(", "filter_Q("),
         ],
+        "jira_markup": [
+            # JIRA horizontal rule (----) triggers CloudFront SQLi_BODY rule
+            # because -- is interpreted as a SQL comment. Replace with Unicode em-dash.
+            (r"-{4,}", "\u2014\u2014"),
+            # JIRA link syntax [text|url] - pipe char can trigger WAF rules
+            # Replace the pipe with a safe Unicode box-drawing separator
+            # Exclude already-sanitized [IMAGE:...] and [TABLE_CELL:...] patterns
+            (r"\[(?!IMAGE:|TABLE_CELL:)([^\]|]+)\|([^\]]+)\]", "[\\1\u2502\\2]"),
+            # JIRA {quote} blocks trigger template injection detection
+            (r"\{quote\}", "[QUOTE]"),
+            # JIRA table header ||Cell|| - double pipes may trigger UNION-like detection
+            (r"\|\|([^|]+)\|\|", r"[TABLE_CELL:\1]"),
+        ],
     }
 
     # Reverse mappings for desanitization (restore original content from LLM responses)
@@ -301,6 +314,9 @@ class CloudFrontWAFSanitizer:
         "…'": "...'",
         # Restore Django/Jinja template tags
         "[DJANGO_TAG:": "{% ",  # handled via regex in desanitize
+        # JIRA markup reverse mappings
+        "\u2014\u2014": "----",
+        "[QUOTE]": "{quote}",
     }
 
     @classmethod
@@ -376,6 +392,24 @@ class CloudFrontWAFSanitizer:
 
         desanitized_new = re.sub(
             r"\[DJANGO_TAG:([^\]]+)\]", _restore_django_tag, desanitized
+        )
+        if desanitized_new != desanitized:
+            was_desanitized = True
+            desanitized = desanitized_new
+
+        # Handle JIRA link syntax: [text│url] -> [text|url]
+        desanitized_new = desanitized.replace("\u2502", "|")
+        if desanitized_new != desanitized:
+            was_desanitized = True
+            desanitized = desanitized_new
+
+        # Handle JIRA table cell syntax: [TABLE_CELL:text] -> ||text||
+        def _restore_table_cell(match: re.Match) -> str:
+            cell_content = match.group(1)
+            return f"||{cell_content}||"
+
+        desanitized_new = re.sub(
+            r"\[TABLE_CELL:([^\]]+)\]", _restore_table_cell, desanitized
         )
         if desanitized_new != desanitized:
             was_desanitized = True

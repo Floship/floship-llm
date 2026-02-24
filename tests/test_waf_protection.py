@@ -274,7 +274,124 @@ class TestCloudFrontWAFSanitizer:
         assert was_desanitized
         assert "filter=Q(" in desanitized
 
-    def test_response_assignment_waf_trigger(self):
+    def test_jira_horizontal_rule_waf_trigger(self):
+        """Test JIRA horizontal rule (----) triggers CloudFront SQLi_BODY rule (-- = SQL comment)."""
+        content = """
+        h3. *Verification Steps Performed*
+        ----
+        h3. *Objective*
+        To verify that for *return shipments* the Postmen payload
+        ----
+        h3. *Result*
+        """
+
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized
+        assert "----" not in sanitized
+        # Replaced with em-dashes
+        assert "\u2014\u2014" in sanitized
+
+        # Ensure desanitize restores it
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(sanitized)
+        assert was_desanitized
+        assert "----" in desanitized
+
+    def test_jira_link_syntax_waf_trigger(self):
+        """Test JIRA link syntax [text|url] with pipe char that may trigger WAF rules."""
+        content = """
+        _Issue created in Slack from a_ [_message_|https://floship.slack.com/archives/CB3BCUV4Y/p1770375621630459?thread_ts=1770375621.630459&cid=CB3BCUV4Y]_._
+        See also [FP-17014|https://jira.example.com/browse/FP-17014] for details.
+        """
+
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized
+        # Pipe chars should be replaced
+        assert "[_message_|https://" not in sanitized
+        assert "[FP-17014|https://" not in sanitized
+        # URLs should be preserved
+        assert "floship.slack.com" in sanitized
+        assert "jira.example.com" in sanitized
+
+        # Ensure desanitize restores it
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(sanitized)
+        assert was_desanitized
+        assert "[_message_|https://" in desanitized
+        assert "[FP-17014|https://" in desanitized
+
+    def test_jira_quote_block_waf_trigger(self):
+        """Test JIRA {quote} block triggers template injection detection."""
+        content = """
+        {quote}*How to use:* Each question includes a "What works today" section.
+        Most have a *Suggested default* — if it looks right, just confirm.{quote}
+        """
+
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized
+        assert "{quote}" not in sanitized
+        assert "[QUOTE]" in sanitized
+
+        # Ensure desanitize restores it
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(sanitized)
+        assert was_desanitized
+        assert "{quote}" in desanitized
+
+    def test_jira_table_header_waf_trigger(self):
+        """Test JIRA table header ||Cell|| double pipes that may trigger UNION-like detection."""
+        content = """
+        ||Area||Current Behavior||
+        |*Package weight fields*|[Package.weight] is a DecimalField|
+        """
+
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized
+        assert "||Area||" not in sanitized
+        assert "||Current Behavior||" not in sanitized
+        assert "[TABLE_CELL:Area]" in sanitized
+
+        # Ensure desanitize restores it
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(sanitized)
+        assert was_desanitized
+        assert "||Area||" in desanitized
+
+    def test_production_jira_release_notes_scenario(self):
+        """Test the actual production scenario: JIRA release notes with all problematic patterns."""
+        content = (
+            "Analyze the following JIRA tickets from release version 2026.27 "
+            "and extract any critical deployment/release instructions.\n"
+            "=== FP-17014 [Task] — Send actual ship_date to Postmen ===\n"
+            "Status: Approved Labels: backend, order_validation, postmen, returns\n"
+            "_Issue created in Slack from a_ "
+            "[_message_|https://floship.slack.com/archives/CB3BCUV4Y/p1770375621630459]_._\n"
+            "----\n"
+            "h3. *Objective*\n"
+            "To verify that for *return shipments* with a *backdated ship_date*\n"
+            "----\n"
+            "h3. *Result*\n"
+            "{quote}*How to use:* Each question includes a What works today section.{quote}\n"
+            "||Area||Current Behavior||\n"
+            "|*Package weight*|DecimalField(max_digits=11)|\n"
+        )
+
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized
+
+        # All problematic patterns should be sanitized
+        assert "----" not in sanitized  # JIRA horizontal rules
+        assert "{quote}" not in sanitized  # JIRA quote blocks
+        assert "||Area||" not in sanitized  # JIRA table headers
+
+        # Content should be preserved semantically
+        assert "FP-17014" in sanitized
+        assert "ship_date" in sanitized
+        assert "Objective" in sanitized
+        assert "Package weight" in sanitized
+
+        # Roundtrip: sanitize -> desanitize should restore
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(sanitized)
+        assert was_desanitized
+        assert "----" in desanitized
+        assert "{quote}" in desanitized
+        assert "||Area||" in desanitized
         """Test 'response =' pattern which triggers XSS event handler detection (onse =)."""
         content = """
         order_ids = [123, 456, 789] # Store in session first
