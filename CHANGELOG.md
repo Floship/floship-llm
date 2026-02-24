@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.50] - 2026-02-24
+
+### Added
+- **JIRA Markup WAF Sanitization:** Added sanitization for JIRA wiki markup patterns that trigger CloudFront WAF blocks: horizontal rules (`----`), link syntax (`[text|url]`), `{quote}` blocks, and table headers (`||Cell||`). All with full desanitization (roundtrip) support.
+
+### Fixed
+- **Pre-commit hook:** Fixed `check-version-consistency` hook using `python` instead of `python3`.
+
 ## [0.5.49] - 2025-12-12
 
 ### Fixed
