@@ -59,8 +59,33 @@ Run `python3 scripts/check_version.py` to verify all version strings are consist
 This repo uses pre-commit hooks. Key notes:
 
 - Use `python3` (not `python`) — there is no bare `python` binary on the target systems.
-- Hooks include: ruff (lint + format), bandit (security), mypy (types), version-consistency check, uv-lock sync.
 - All hooks must pass before a commit is accepted.
+
+### Hook Summary
+
+| Hook | What it does |
+|------|-------------|
+| `detect-secrets` | Blocks commits containing secrets (uses `.secrets.baseline`) |
+| `detect-private-key` | Blocks commits containing private keys |
+| `check-added-large-files` | Blocks files > 500 KB |
+| `trailing-whitespace` | Auto-trims trailing whitespace |
+| `end-of-file-fixer` | Auto-fixes missing final newlines |
+| `check-yaml` / `check-json` / `check-toml` | Validates config file syntax |
+| `check-merge-conflict` | Blocks unresolved merge conflict markers |
+| `check-case-conflict` | Blocks case-only filename collisions |
+| `mixed-line-ending` | Enforces LF line endings |
+| `check-ast` | Validates Python syntax |
+| `check-docstring-first` | Ensures docstring is first statement |
+| `debug-statements` | Blocks `pdb`, `breakpoint()`, etc. |
+| `name-tests-test` | Enforces `test_` prefix on test files |
+| `ruff` | Lints and auto-fixes Python (replaces flake8/pylint/isort) |
+| `ruff-format` | Formats Python (replaces black) |
+| `bandit` | Security scan (excludes `tests/`) |
+| `mypy` | Type checking on `floship_llm/` |
+| `version-bump-reminder` | ⚠️ Warns when `floship_llm/` changes without version bump |
+| `check-version-consistency` | Blocks if version strings are out of sync |
+| `uv-lock-check` | Blocks if `uv.lock` is stale vs `pyproject.toml` |
+| `uv-sync-on-toml-change` | Auto-runs `uv lock` when `pyproject.toml` changes |
 
 ## Testing
 

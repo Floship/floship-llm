@@ -100,6 +100,13 @@ repos:
   # UV lock file sync - ensure uv.lock is up to date with pyproject.toml
   - repo: local
     hooks:
+      - id: version-bump-reminder
+        name: 💡 Version bump reminder
+        entry: python3 scripts/check_version_bump_reminder.py
+        language: system
+        files: ^floship_llm/
+        pass_filenames: false
+        always_run: true
       - id: check-version-consistency
         name: 🔢 Check version consistency
         entry: python3 scripts/check_version.py
