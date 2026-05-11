@@ -263,6 +263,13 @@ class CloudFrontWAFSanitizer:
             # Django ORM filter=Q patterns that look like SQL injection
             (r"filter\s*=\s*Q\(", "filter_Q("),
         ],
+        "localhost_urls": [
+            # http://localhost:PORT/path URLs trigger CloudFront SSRF detection.
+            # Strip the scheme+host and keep only the path for context.
+            (r"https?://localhost(?::\d+)?(/[^\s]*)", r"[LOCAL_PATH:\1]"),
+            # Bare http://localhost with no path
+            (r"https?://localhost(?::\d+)?", "[LOCAL_URL]"),
+        ],
         "jira_markup": [
             # JIRA horizontal rule (----) triggers CloudFront SQLi_BODY rule
             # because -- is interpreted as a SQL comment. Replace with Unicode em-dash.
@@ -317,6 +324,8 @@ class CloudFrontWAFSanitizer:
         # JIRA markup reverse mappings
         "\u2014\u2014": "----",
         "[QUOTE]": "{quote}",
+        # Localhost URL reverse mappings
+        "[LOCAL_URL]": "http://localhost",
     }
 
     @classmethod
@@ -392,6 +401,18 @@ class CloudFrontWAFSanitizer:
 
         desanitized_new = re.sub(
             r"\[DJANGO_TAG:([^\]]+)\]", _restore_django_tag, desanitized
+        )
+        if desanitized_new != desanitized:
+            was_desanitized = True
+            desanitized = desanitized_new
+
+        # Handle localhost URL paths: [LOCAL_PATH:/foo/bar] -> http://localhost/foo/bar
+        def _restore_local_path(match: re.Match) -> str:
+            path = match.group(1)
+            return f"http://localhost{path}"
+
+        desanitized_new = re.sub(
+            r"\[LOCAL_PATH:([^\]]+)\]", _restore_local_path, desanitized
         )
         if desanitized_new != desanitized:
             was_desanitized = True

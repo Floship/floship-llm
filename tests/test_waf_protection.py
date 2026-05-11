@@ -989,6 +989,54 @@ class TestCloudFrontWAFError:
         assert len(sentry_extra["detected_blockers"]) == 2
         assert sentry_extra["detected_blockers"][0] == ("python_exec", "exec(")
 
+    def test_localhost_url_waf_trigger(self):
+        """Test that http://localhost:PORT/path URLs are sanitized for WAF."""
+        content = "Page loaded at http://localhost:8000/api/v1/orders and returned 200"
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized
+        assert "http://localhost" not in sanitized
+        assert "[LOCAL_PATH:/api/v1/orders]" in sanitized
+
+    def test_localhost_url_no_port(self):
+        """Test localhost URL without a port is sanitized."""
+        content = "Visit http://localhost/admin for the dashboard"
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized
+        assert "http://localhost" not in sanitized
+        assert "[LOCAL_PATH:/admin]" in sanitized
+
+    def test_localhost_url_bare(self):
+        """Test bare http://localhost with no path."""
+        content = "Server running on http://localhost:3000"
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized
+        assert "http://localhost" not in sanitized
+        assert "[LOCAL_URL]" in sanitized
+
+    def test_localhost_https_sanitized(self):
+        """Test that https://localhost is also sanitized."""
+        content = "Connect to https://localhost:8443/secure"
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized
+        assert "https://localhost" not in sanitized
+        assert "[LOCAL_PATH:/secure]" in sanitized
+
+    def test_localhost_url_desanitize_roundtrip(self):
+        """Test that localhost URLs survive sanitize -> desanitize roundtrip."""
+        content = "Check http://localhost:8000/api/orders for the page context"
+        sanitized, _ = CloudFrontWAFSanitizer.sanitize(content)
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(sanitized)
+        assert was_desanitized
+        assert "http://localhost/api/orders" in desanitized
+
+    def test_localhost_bare_desanitize_roundtrip(self):
+        """Test bare localhost URL roundtrip."""
+        content = "Running on http://localhost:3000"
+        sanitized, _ = CloudFrontWAFSanitizer.sanitize(content)
+        desanitized, was_desanitized = CloudFrontWAFSanitizer.desanitize(sanitized)
+        assert was_desanitized
+        assert "http://localhost" in desanitized
+
     def test_exception_exported_from_init(self):
         """Test that CloudFrontWAFError is exported from floship_llm.__init__."""
         from floship_llm import CloudFrontWAFError as ImportedError
