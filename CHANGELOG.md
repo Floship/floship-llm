@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.51] - 2026-05-11
+
+### Added
+- **Localhost URL WAF Sanitization:** `http(s)://localhost:PORT/path` URLs now sanitized to prevent CloudFront SSRF detection blocks. Preserves path context via `[LOCAL_PATH:/path]` placeholder with full desanitize roundtrip.
+
 ## [0.5.50] - 2026-02-24
 
 ### Added
