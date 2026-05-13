@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from floship_llm.client import LLM, TruncatedResponseError
+from floship_llm.client import LLM, CloudFrontWAFError, TruncatedResponseError
 
 
 class TestClientErrors:
@@ -65,40 +65,25 @@ class TestClientErrors:
                 "Did not find expected log message about increasing max_completion_tokens"
             )
 
-    def test_cloudfront_403_retry(self, llm):
-        """Test that CloudFront 403 errors trigger retry with sanitization."""
-        # Mock execute_with_retry to raise 403 error then succeed
-
+    def test_cloudfront_403_fails_fast(self, llm):
+        """Test that CloudFront 403 errors raise CloudFrontWAFError immediately (no retry)."""
         # Create a mock 403 error
         error_403 = Exception("403 Forbidden")
-        # We need _is_cloudfront_403 to return True
         llm._is_cloudfront_403 = Mock(return_value=True)
 
-        # Mock execute_with_retry to raise error first, then return success string
-        llm.retry_handler.execute_with_retry = Mock(
-            side_effect=[error_403, "Success response"]
-        )
+        # Mock execute_with_retry to raise 403 error
+        llm.retry_handler.execute_with_retry = Mock(side_effect=error_403)
 
-        # Mock _process_streaming_response to just return the content
-        llm._process_streaming_response = Mock(return_value="Success")
+        # Mock _log_waf_blocked_content
+        llm._log_waf_blocked_content = Mock(return_value=[("xss", "<script>")])
 
-        # Enable WAF retry
-        llm.waf_config.retry_with_sanitization = True
-        llm.waf_config.enable_waf_sanitization = False
+        with pytest.raises(CloudFrontWAFError) as exc_info:
+            llm.prompt("test prompt")
 
-        # Mock sanitization
-        llm._sanitize_for_waf = Mock(return_value="Sanitized content")
-
-        # Mock sleep to avoid delay
-        with patch("time.sleep"):
-            response = llm.prompt("test prompt")
-
-        assert response == "Success"
-        assert llm.retry_handler.execute_with_retry.call_count == 2
+        assert "CloudFront WAF blocked request" in str(exc_info.value)
+        assert exc_info.value.context == "prompt method"
+        assert exc_info.value.original_error is error_403
         assert llm.waf_metrics.cloudfront_403_errors == 1
-
-        # Check that sanitization was applied on second call
-        # Again, since execute_with_retry is mocked and doesn't call the real function,
-        # we can't check the arguments passed to client.create.
-        # But we can check if _sanitize_for_waf was called.
-        llm._sanitize_for_waf.assert_called()
+        assert llm.waf_metrics.failed_requests == 1
+        # Only one attempt — no retry
+        assert llm.retry_handler.execute_with_retry.call_count == 1

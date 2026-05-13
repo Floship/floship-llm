@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.52] - 2026-05-13
+
+### Changed
+- **WAF 403 fail-fast:** CloudFront WAF 403 errors now raise `CloudFrontWAFError` immediately instead of retrying. Enables Sentry exception capture on first occurrence.
+- Removed `max_waf_retries`, `retry_with_sanitization`, `retry_delay_base` from `LLMConfig`.
+- Removed `FLOSHIP_LLM_WAF_MAX_RETRIES` environment variable.
+
+### Added
+- **Ellipsis-before-newline WAF sanitization:** 3+ dots before `\n` (e.g. `...\n`) replaced with unicode ellipsis to prevent CloudFront path traversal detection.
+
 ## [0.5.51] - 2026-05-11
 
 ### Added

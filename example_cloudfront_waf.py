@@ -103,7 +103,6 @@ def example_3_custom_config():
     # Create custom configuration
     config = LLMConfig(
         enable_waf_sanitization=True,
-        max_waf_retries=3,  # Allow 3 retries on 403
         debug_mode=True,  # Enable detailed logging
         log_sanitization=True,  # Log when content is sanitized
         log_blockers=True,  # Log which patterns were found

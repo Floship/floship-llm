@@ -256,8 +256,7 @@ llm = LLM(enable_waf_sanitization=False)  # Disable
 
 config = LLMConfig(
     enable_waf_sanitization=True,
-    max_waf_retries=2,
-    retry_with_sanitization=True,
+    debug_mode=True,
 )
 llm = LLM(waf_config=config)
 ```

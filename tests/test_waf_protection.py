@@ -557,20 +557,16 @@ class TestLLMConfig:
         config = LLMConfig()
 
         assert config.enable_waf_sanitization is True
-        assert config.max_waf_retries == 2
-        assert config.retry_with_sanitization is True
         assert config.cloudfront_waf_detection is True
 
     def test_custom_config(self):
         """Test custom configuration."""
         config = LLMConfig(
             enable_waf_sanitization=False,
-            max_waf_retries=5,
             debug_mode=True,
         )
 
         assert config.enable_waf_sanitization is False
-        assert config.max_waf_retries == 5
         assert config.debug_mode is True
 
     @patch.dict(
@@ -578,7 +574,6 @@ class TestLLMConfig:
         {
             "FLOSHIP_LLM_WAF_SANITIZE": "false",
             "FLOSHIP_LLM_DEBUG": "true",
-            "FLOSHIP_LLM_WAF_MAX_RETRIES": "3",
         },
     )
     def test_from_env(self):
@@ -587,7 +582,6 @@ class TestLLMConfig:
 
         assert config.enable_waf_sanitization is False
         assert config.debug_mode is True
-        assert config.max_waf_retries == 3
 
 
 class TestLLMMetrics:
@@ -660,10 +654,9 @@ class TestLLMWAFIntegration:
 
     def test_llm_custom_waf_config(self, mock_env, mock_client):
         """Test LLM with custom WAF config."""
-        custom_config = LLMConfig(max_waf_retries=5, debug_mode=True)
+        custom_config = LLMConfig(debug_mode=True)
         llm = LLM(waf_config=custom_config)
 
-        assert llm.waf_config.max_waf_retries == 5
         assert llm.waf_config.debug_mode is True
 
     def test_sanitize_for_waf_enabled(self, mock_env, mock_client):

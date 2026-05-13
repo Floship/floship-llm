@@ -108,11 +108,6 @@ class LLMConfig:
     enable_waf_sanitization: bool = True
     sanitization_aggressive: bool = False
 
-    # Retry settings
-    max_waf_retries: int = 2
-    retry_with_sanitization: bool = True
-    retry_delay_base: float = 1.0  # Base delay for exponential backoff
-
     # Logging
     debug_mode: bool = False
     log_sanitization: bool = True
@@ -130,7 +125,6 @@ class LLMConfig:
             ).lower()
             == "true",
             debug_mode=os.getenv("FLOSHIP_LLM_DEBUG", "false").lower() == "true",
-            max_waf_retries=int(os.getenv("FLOSHIP_LLM_WAF_MAX_RETRIES", "2")),
         )
 
 
@@ -142,7 +136,6 @@ class LLMMetrics:
     sanitized_requests: int = 0
     failed_requests: int = 0
     cloudfront_403_errors: int = 0
-    retry_successes: int = 0
 
     # Pattern frequencies
     path_traversal_count: int = 0
@@ -538,7 +531,6 @@ class LLM:
         Environment Variables Optional (CloudFront WAF):
             FLOSHIP_LLM_WAF_SANITIZE: Enable WAF sanitization (default: 'true')
             FLOSHIP_LLM_DEBUG: Enable debug mode (default: 'false')
-            FLOSHIP_LLM_WAF_MAX_RETRIES: Max retries on 403 (default: '2')
         """
         # Validate required environment variables
         self._validate_environment()
@@ -1957,9 +1949,6 @@ class LLM:
             self._last_response_metadata = {}
 
         # Sanitize prompt and system message if WAF protection is enabled
-        original_prompt = prompt
-        original_system = system
-
         if prompt and not retry:
             self.retry_count = 0
 
@@ -1977,271 +1966,188 @@ class LLM:
         max_truncation_retries = 2
         current_max_tokens = self.max_completion_tokens
         extended_thinking_disabled_for_retry = False
-        original_extended_thinking = self.extended_thinking
 
         for truncation_attempt in range(max_truncation_retries + 1):
-            # Retry loop for CloudFront WAF 403 errors
-            last_error = None
-            for waf_attempt in range(self.waf_config.max_waf_retries + 1):
-                try:
-                    if self.waf_config.debug_mode:
-                        logger.debug(
-                            f"Request attempt {waf_attempt + 1}/{self.waf_config.max_waf_retries + 1}"
+            try:
+                if self.waf_config.debug_mode:
+                    logger.debug("Sending request to LLM")
+
+                params = self.get_request_params()
+
+                # Override max_completion_tokens if we're retrying due to truncation
+                if current_max_tokens is not None:
+                    params["max_completion_tokens"] = current_max_tokens
+
+                if self.waf_config.debug_mode:
+                    logger.debug(f"Prompting LLM with parameters: {params}")
+                    logger.debug(f"Message count: {len(self.messages)}")
+                    logger.debug(f"Using streaming: {use_streaming}")
+
+                # Validate messages before sending
+                validated_messages = self._validate_messages_for_api(self.messages)
+
+                if self.verbosity >= 2:
+                    logger.debug("FULL REQUEST DATA:")
+                    logger.debug(f"Params: {json.dumps(params, default=str)}")
+                    logger.debug(
+                        f"Messages: {json.dumps(validated_messages, default=str)}"
+                    )
+
+                if use_streaming:
+                    # Use streaming to prevent Heroku 408 timeouts
+                    # Collect full response, then process (including structured output)
+                    params["stream"] = True
+
+                    # Use retry handler for streaming requests too
+                    def streaming_request():
+                        stream = self.client.chat.completions.create(
+                            **params, messages=validated_messages
                         )
-                        if waf_attempt > 0:
-                            logger.debug("Retrying with forced sanitization")
+                        full_response = ""
+                        for chunk in stream:
+                            if chunk.choices and len(chunk.choices) > 0:
+                                delta = chunk.choices[0].delta
+                                if delta.content:
+                                    full_response += delta.content
+                        return full_response
 
-                    params = self.get_request_params()
+                    full_response = self.retry_handler.execute_with_retry(
+                        streaming_request
+                    )
 
-                    # Override max_completion_tokens if we're retrying due to truncation
-                    if current_max_tokens is not None:
-                        params["max_completion_tokens"] = current_max_tokens
+                    # Process the collected streaming response
+                    result = self._process_streaming_response(full_response)
+                else:
+                    # Non-streaming mode (for tools)
+                    response = self.retry_handler.execute_with_retry(
+                        self.client.chat.completions.create,
+                        **params,
+                        messages=validated_messages,
+                    )
 
-                    if self.waf_config.debug_mode:
-                        logger.debug(f"Prompting LLM with parameters: {params}")
-                        logger.debug(f"Message count: {len(self.messages)}")
-                        logger.debug(f"Using streaming: {use_streaming}")
+                    result = self.process_response(
+                        response, stream_final_response=stream_final_response
+                    )
 
-                    # Validate messages before sending
-                    validated_messages = self._validate_messages_for_api(self.messages)
+                # Store final metadata
+                self._last_response_metadata = {
+                    "total_tool_calls": self._current_tool_call_count,
+                    "recursion_depth": self._current_recursion_depth,
+                    "tool_history": self._current_tool_history.copy(),
+                }
 
-                    if self.verbosity >= 2:
-                        logger.debug("FULL REQUEST DATA:")
-                        logger.debug(f"Params: {json.dumps(params, default=str)}")
-                        logger.debug(
-                            f"Messages: {json.dumps(validated_messages, default=str)}"
-                        )
+                if not self.continuous:
+                    self.reset()
 
-                    if use_streaming:
-                        # Use streaming to prevent Heroku 408 timeouts
-                        # Collect full response, then process (including structured output)
-                        params["stream"] = True
+                return result
 
-                        # Use retry handler for streaming requests too
-                        def streaming_request():
-                            stream = self.client.chat.completions.create(
-                                **params, messages=validated_messages
-                            )
-                            full_response = ""
-                            for chunk in stream:
-                                if chunk.choices and len(chunk.choices) > 0:
-                                    delta = chunk.choices[0].delta
-                                    if delta.content:
-                                        full_response += delta.content
-                            return full_response
-
-                        full_response = self.retry_handler.execute_with_retry(
-                            streaming_request
-                        )
-
-                        # Process the collected streaming response
-                        result = self._process_streaming_response(full_response)
+            except TruncatedResponseError:
+                # Response was truncated - retry with more tokens
+                if truncation_attempt < max_truncation_retries:
+                    # Double the tokens for retry
+                    old_tokens = current_max_tokens
+                    if current_max_tokens is None:
+                        # Default to 4000 if not set
+                        current_max_tokens = 4000
                     else:
-                        # Non-streaming mode (for tools)
-                        response = self.retry_handler.execute_with_retry(
-                            self.client.chat.completions.create,
-                            **params,
-                            messages=validated_messages,
-                        )
+                        current_max_tokens = current_max_tokens * 2
 
-                        result = self.process_response(
-                            response, stream_final_response=stream_final_response
-                        )
+                    logger.warning(
+                        f"Truncated response detected (attempt {truncation_attempt + 1}/"
+                        f"{max_truncation_retries + 1}). "
+                        f"Retrying with max_completion_tokens: {old_tokens} -> {current_max_tokens}"
+                    )
 
-                    # Store final metadata
-                    self._last_response_metadata = {
-                        "total_tool_calls": self._current_tool_call_count,
-                        "recursion_depth": self._current_recursion_depth,
-                        "tool_history": self._current_tool_history.copy(),
-                    }
+                    # Remove the last assistant message (the truncated one) before retrying
+                    if self.messages and self.messages[-1].get("role") == "assistant":
+                        self.messages.pop()
 
-                    if not self.continuous:
-                        self.reset()
+                    continue  # Retry with more tokens
+                else:
+                    # Out of truncation retries
+                    logger.error(
+                        f"Response still truncated after {max_truncation_retries + 1} attempts "
+                        f"with max_completion_tokens={current_max_tokens}"
+                    )
+                    raise
 
-                    # Track successful retry
-                    if waf_attempt > 0:
-                        self.waf_metrics.retry_successes += 1
-                        logger.info(
-                            f"CloudFront WAF: Retry successful after {waf_attempt} attempts"
-                        )
+            except Exception as e:
+                # Claude extended thinking validation failures (400) should retry without extended thinking
+                # but enable pseudo-thinking (prompt-based) as a fallback
+                if (
+                    not extended_thinking_disabled_for_retry
+                    and self._should_disable_extended_thinking(e)
+                ):
+                    extended_thinking_disabled_for_retry = True
+                    self.extended_thinking = None
+                    self._thinking_auto_disabled = True
+                    self._use_pseudo_thinking = True
+                    logger.warning(
+                        "Extended thinking was rejected by the API; "
+                        "switching to pseudo-thinking mode (prompt-based <reasoning> tags)."
+                    )
+                    continue
 
-                    return result
-
-                except TruncatedResponseError:
-                    # Response was truncated - break out of WAF loop to retry with more tokens
-                    if truncation_attempt < max_truncation_retries:
-                        # Double the tokens for retry
-                        old_tokens = current_max_tokens
-                        if current_max_tokens is None:
-                            # Default to 4000 if not set
-                            current_max_tokens = 4000
-                        else:
-                            current_max_tokens = current_max_tokens * 2
-
+                # Check if it's a context length error - auto-recover by trimming history
+                if self._is_context_length_error(e):
+                    if self._trim_conversation_for_context():
                         logger.warning(
-                            f"Truncated response detected (attempt {truncation_attempt + 1}/"
-                            f"{max_truncation_retries + 1}). "
-                            f"Retrying with max_completion_tokens: {old_tokens} -> {current_max_tokens}"
+                            "Context length exceeded. Trimmed conversation history and retrying."
                         )
-
-                        # Remove the last assistant message (the truncated one) before retrying
-                        if (
-                            self.messages
-                            and self.messages[-1].get("role") == "assistant"
-                        ):
-                            self.messages.pop()
-
-                        break  # Break out of WAF loop to retry with more tokens
+                        continue
                     else:
-                        # Out of truncation retries
                         logger.error(
-                            f"Response still truncated after {max_truncation_retries + 1} attempts "
-                            f"with max_completion_tokens={current_max_tokens}"
+                            "Context length exceeded but cannot trim further. "
+                            "Consider using a shorter prompt or clearing history with reset()."
                         )
                         raise
 
-                except Exception as e:
-                    last_error = e
+                # Check if it's an invalid content error - sanitize and retry
+                if self._is_invalid_content_error(e):
+                    logger.warning(
+                        "Invalid content error detected. Running sanitize_messages() and retrying."
+                    )
+                    self.sanitize_messages()
+                    continue
 
-                    # Claude extended thinking validation failures (400) should retry without extended thinking
-                    # but enable pseudo-thinking (prompt-based) as a fallback
-                    if (
-                        not extended_thinking_disabled_for_retry
-                        and self._should_disable_extended_thinking(e)
-                    ):
-                        extended_thinking_disabled_for_retry = True
-                        self.extended_thinking = None
-                        self._thinking_auto_disabled = True
-                        self._use_pseudo_thinking = True
-                        logger.warning(
-                            "Extended thinking was rejected by the API; "
-                            "switching to pseudo-thinking mode (prompt-based <reasoning> tags)."
-                        )
-                        continue
+                # Check if it's a 408 timeout error - auto-recover by enabling streaming
+                if self._is_timeout_408(e) and not use_streaming:
+                    logger.warning(
+                        "408 Request Timeout detected. This often occurs when tools are enabled "
+                        "and the response is too long. The request will be retried by the retry handler. "
+                        "Consider using stream_final_response=True for long responses with tools."
+                    )
+                    # Log helpful debugging information
+                    logger.info(
+                        f"408 Debug: use_streaming={use_streaming}, "
+                        f"enable_tools={self.enable_tools}, "
+                        f"tools_count={len(self.tool_manager.tools) if self.tool_manager else 0}, "
+                        f"message_count={len(self.messages)}"
+                    )
+                    # Let the retry handler handle the retry
+                    raise
 
-                    # Check if it's a context length error - auto-recover by trimming history
-                    if self._is_context_length_error(e):
-                        if self._trim_conversation_for_context():
-                            logger.warning(
-                                "Context length exceeded. Trimmed conversation history and retrying."
-                            )
-                            continue
-                        else:
-                            logger.error(
-                                "Context length exceeded but cannot trim further. "
-                                "Consider using a shorter prompt or clearing history with reset()."
-                            )
-                            raise
+                # CloudFront WAF 403 — fail fast, raise for Sentry capture
+                if self._is_cloudfront_403(e):
+                    self.waf_metrics.cloudfront_403_errors += 1
+                    self.waf_metrics.failed_requests += 1
+                    detected_blockers = self._log_waf_blocked_content(
+                        self.messages, "(prompt method)"
+                    )
+                    raise CloudFrontWAFError(
+                        message="CloudFront WAF blocked request",
+                        messages=self.messages.copy(),
+                        detected_blockers=detected_blockers,
+                        context="prompt method",
+                        original_error=e,
+                    ) from e
 
-                    # Check if it's an invalid content error - sanitize and retry
-                    if self._is_invalid_content_error(e):
-                        logger.warning(
-                            "Invalid content error detected. Running sanitize_messages() and retrying."
-                        )
-                        self.sanitize_messages()
-                        continue
+                self.waf_metrics.failed_requests += 1
 
-                    # Check if it's a 408 timeout error - auto-recover by enabling streaming
-                    if self._is_timeout_408(e) and not use_streaming:
-                        logger.warning(
-                            "408 Request Timeout detected. This often occurs when tools are enabled "
-                            "and the response is too long. The request will be retried by the retry handler. "
-                            "Consider using stream_final_response=True for long responses with tools."
-                        )
-                        # Log helpful debugging information
-                        logger.info(
-                            f"408 Debug: use_streaming={use_streaming}, "
-                            f"enable_tools={self.enable_tools}, "
-                            f"tools_count={len(self.tool_manager.tools) if self.tool_manager else 0}, "
-                            f"message_count={len(self.messages)}"
-                        )
-                        # Let the retry handler handle the retry
-                        raise
+                if self.waf_config.debug_mode:
+                    logger.error(f"Request failed: {type(e).__name__}: {str(e)[:200]}")
 
-                    # Check if it's a CloudFront 403 error
-                    if (
-                        self._is_cloudfront_403(e)
-                        and waf_attempt < self.waf_config.max_waf_retries
-                    ):
-                        self.waf_metrics.cloudfront_403_errors += 1
-                        wait_time = self.waf_config.retry_delay_base * (2**waf_attempt)
-
-                        logger.warning(
-                            f"CloudFront WAF 403 error (attempt {waf_attempt + 1}/"
-                            f"{self.waf_config.max_waf_retries + 1}). "
-                            f"Retrying in {wait_time}s with sanitization..."
-                        )
-
-                        # Log what content triggered the block
-                        self._log_waf_blocked_content(
-                            self.messages, f"(attempt {waf_attempt + 1}, prompt method)"
-                        )
-
-                        # Wait before retry
-                        time.sleep(wait_time)
-
-                        # Force sanitization on retry if not already enabled
-                        if (
-                            not self.waf_config.enable_waf_sanitization
-                            and self.waf_config.retry_with_sanitization
-                        ):
-                            # Re-add messages with sanitization
-                            if not retry:
-                                # Clear last messages and re-add with sanitization
-                                if original_system:
-                                    self.messages[-2]["content"] = (
-                                        self._sanitize_for_waf(original_system)
-                                    )
-                                if original_prompt:
-                                    self.messages[-1]["content"] = (
-                                        self._sanitize_for_waf(original_prompt)
-                                    )
-
-                        continue
-                    else:
-                        # Not a 403 error or out of retries
-                        if self._is_cloudfront_403(e):
-                            logger.error(
-                                f"CloudFront WAF: Failed after {self.waf_config.max_waf_retries + 1} attempts"
-                            )
-                            # Log and collect blockers for the exception
-                            detected_blockers = self._log_waf_blocked_content(
-                                self.messages, "(final failure, prompt method)"
-                            )
-                            self.waf_metrics.failed_requests += 1
-
-                            # Raise CloudFrontWAFError with full context for Sentry
-                            raise CloudFrontWAFError(
-                                message=f"CloudFront WAF blocked request after {self.waf_config.max_waf_retries + 1} attempts",
-                                messages=self.messages.copy(),
-                                detected_blockers=detected_blockers,
-                                context="prompt method",
-                                original_error=e,
-                            ) from e
-
-                        self.waf_metrics.failed_requests += 1
-
-                        if self.waf_config.debug_mode:
-                            logger.error(
-                                f"Request failed: {type(e).__name__}: {str(e)[:200]}"
-                            )
-
-                        raise
-            else:
-                # WAF loop completed without break - either success (returned) or continue
-                # If we get here without returning, we exhausted WAF retries
-                if last_error:
-                    # Restore original extended_thinking setting before raising
-                    self.extended_thinking = original_extended_thinking
-                    raise last_error
-                # If no error and didn't return, something is off - break to outer loop
-                break
-
-        # This should never be reached, but just in case
-        if last_error:
-            # Restore original extended_thinking setting before raising
-            self.extended_thinking = original_extended_thinking
-            raise last_error
+                raise
 
     def prompt_stream(self, prompt: str, system: Optional[str] = None):
         """
@@ -2262,8 +2168,8 @@ class LLM:
 
         Note:
             CloudFront WAF Protection: Content is automatically sanitized before
-            sending to prevent 403 errors. On 403 errors, automatically retries
-            with forced sanitization.
+            sending to prevent 403 errors. On 403 errors, raises CloudFrontWAFError
+            immediately for Sentry capture.
 
         Example:
             >>> client = LLM(stream=True)
@@ -2290,25 +2196,20 @@ class LLM:
             if system:
                 system = self._sanitize_for_waf(system)
 
-        # Store original for retry
-        original_prompt = prompt
-        original_system = system
-
         # Add messages
         if system:
             self.add_message("system", system)
         self.add_message("user", prompt)
 
-        # Retry loop for CloudFront WAF 403 errors
-        last_error = None
         extended_thinking_disabled_for_retry = False
         original_extended_thinking = self.extended_thinking
-        for waf_attempt in range(self.waf_config.max_waf_retries + 1):
+        # Loop for non-WAF error recovery (extended thinking, context length, invalid content)
+        # WAF 403 errors fail fast — no retry
+        max_error_recovery_attempts = 3
+        for _attempt in range(max_error_recovery_attempts):
             try:
                 if self.waf_config.debug_mode:
-                    logger.debug(
-                        f"Streaming request attempt {waf_attempt + 1}/{self.waf_config.max_waf_retries + 1}"
-                    )
+                    logger.debug("Sending streaming request to LLM")
 
                 # Get request params and validate messages
                 params = self.get_request_params()
@@ -2349,18 +2250,9 @@ class LLM:
                     ).strip()
                     self.add_message("assistant", clean_response)
 
-                # Track successful retry
-                if waf_attempt > 0:
-                    self.waf_metrics.retry_successes += 1
-                    logger.info(
-                        f"CloudFront WAF: Stream retry successful after {waf_attempt} attempts"
-                    )
-
-                break  # Success, exit retry loop
+                break  # Success, exit loop
 
             except Exception as e:
-                last_error = e
-
                 # Claude extended thinking validation failures (400) should retry without extended thinking
                 # but enable pseudo-thinking (prompt-based) as a fallback
                 if (
@@ -2399,87 +2291,30 @@ class LLM:
                     self.sanitize_messages()
                     continue
 
-                # Check if it's a CloudFront 403 error
-                if (
-                    self._is_cloudfront_403(e)
-                    and waf_attempt < self.waf_config.max_waf_retries
-                ):
+                # CloudFront WAF 403 — fail fast, raise for Sentry capture
+                if self._is_cloudfront_403(e):
                     self.waf_metrics.cloudfront_403_errors += 1
-                    wait_time = self.waf_config.retry_delay_base * (2**waf_attempt)
-
-                    logger.warning(
-                        f"CloudFront WAF 403 error during streaming (attempt {waf_attempt + 1}/"
-                        f"{self.waf_config.max_waf_retries + 1}). "
-                        f"Retrying in {wait_time}s with sanitization..."
-                    )
-
-                    # Log what content triggered the block
-                    self._log_waf_blocked_content(
-                        self.messages, f"(attempt {waf_attempt + 1}, stream method)"
-                    )
-
-                    # Wait before retry
-                    time.sleep(wait_time)
-
-                    # Force sanitization on retry
-                    if (
-                        not self.waf_config.enable_waf_sanitization
-                        and self.waf_config.retry_with_sanitization
-                    ):
-                        # Re-sanitize messages
-                        if original_system:
-                            self.messages[-2]["content"] = self._sanitize_for_waf(
-                                original_system
-                            )
-                        if original_prompt:
-                            self.messages[-1]["content"] = self._sanitize_for_waf(
-                                original_prompt
-                            )
-
-                    continue
-                else:
-                    # Not a 403 error or out of retries
-                    if self._is_cloudfront_403(e):
-                        logger.error(
-                            f"CloudFront WAF: Streaming failed after {self.waf_config.max_waf_retries + 1} attempts"
-                        )
-                        # Log and collect blockers for the exception
-                        detected_blockers = self._log_waf_blocked_content(
-                            self.messages, "(final failure, stream method)"
-                        )
-                        self.waf_metrics.failed_requests += 1
-
-                        # Restore original extended_thinking setting before raising
-                        self.extended_thinking = original_extended_thinking
-
-                        # Raise CloudFrontWAFError with full context for Sentry
-                        raise CloudFrontWAFError(
-                            message=f"CloudFront WAF blocked streaming request after {self.waf_config.max_waf_retries + 1} attempts",
-                            messages=self.messages.copy(),
-                            detected_blockers=detected_blockers,
-                            context="prompt_stream method",
-                            original_error=e,
-                        ) from e
-
                     self.waf_metrics.failed_requests += 1
-
-                    if self.waf_config.debug_mode:
-                        logger.error(
-                            f"Streaming error: {type(e).__name__}: {str(e)[:200]}"
-                        )
-
-                    # Restore original extended_thinking setting before raising
+                    detected_blockers = self._log_waf_blocked_content(
+                        self.messages, "(prompt_stream method)"
+                    )
                     self.extended_thinking = original_extended_thinking
-                    raise
+                    raise CloudFrontWAFError(
+                        message="CloudFront WAF blocked streaming request",
+                        messages=self.messages.copy(),
+                        detected_blockers=detected_blockers,
+                        context="prompt_stream method",
+                        original_error=e,
+                    ) from e
+
+                self.waf_metrics.failed_requests += 1
+                if self.waf_config.debug_mode:
+                    logger.error(f"Streaming error: {type(e).__name__}: {str(e)[:200]}")
+                self.extended_thinking = original_extended_thinking
+                raise
 
         if not self.continuous:
             self.reset()
-
-        # If we exited loop with error, raise it
-        if last_error and waf_attempt >= self.waf_config.max_waf_retries:
-            # Restore original extended_thinking setting before raising
-            self.extended_thinking = original_extended_thinking
-            raise last_error
 
     # Alias for prompt() - more intuitive for chat-based interactions
     chat = prompt
