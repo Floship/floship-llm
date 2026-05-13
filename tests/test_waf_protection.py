@@ -1037,6 +1037,48 @@ class TestCloudFrontWAFError:
         assert was_desanitized
         assert "http://localhost" in desanitized
 
+    def test_ellipsis_before_newline_waf_trigger(self):
+        """Test that ...\n is sanitized to prevent path traversal detection."""
+        content = "some text...\n\nmore text"
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized
+        assert "...\n" not in sanitized
+        assert "\u2026\n" in sanitized
+
+    def test_four_dots_before_newline_waf_trigger(self):
+        """Test that ....\n (4+ dots) is also sanitized."""
+        content = "text....\n\n"
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized
+        assert "....\n" not in sanitized
+
+    def test_ellipsis_with_space_not_affected(self):
+        """Test that '... ' (space after dots) is NOT sanitized."""
+        content = "hello... world"
+        sanitized, _ = CloudFrontWAFSanitizer.sanitize(content)
+        assert "hello... world" in sanitized
+
+    def test_two_dots_before_newline_not_affected(self):
+        """Test that ..\n (only 2 dots) is NOT caught by this rule."""
+        content = "hello..\n\n"
+        sanitized, _ = CloudFrontWAFSanitizer.sanitize(content)
+        # 2 dots + newline should not be treated as ellipsis
+        assert "..\n" in sanitized
+
+    def test_ellipsis_newline_production_kb_scenario(self):
+        """Test production KB payload pattern with ellipsis before newlines."""
+        content = (
+            "Search result 1: The order was shipped...\n"
+            "Search result 2: Customer contacted us...\n\n"
+            "Search result 3: Final update....\n"
+        )
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized
+        # All ...\n patterns replaced with unicode ellipsis
+        assert "...\n" not in sanitized
+        assert "....\n" not in sanitized
+        assert "\u2026" in sanitized
+
     def test_exception_exported_from_init(self):
         """Test that CloudFrontWAFError is exported from floship_llm.__init__."""
         from floship_llm import CloudFrontWAFError as ImportedError

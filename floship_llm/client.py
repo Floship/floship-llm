@@ -222,6 +222,11 @@ class CloudFrontWAFSanitizer:
             # because it sees ..\" as ..\  - replace with safe Unicode ellipsis
             (r'\.\.\.\\?"', '…"'),  # Replace ...\" or ..." with …"
             (r"\.\.\.\\?'", "…'"),  # Replace ...\' or ...' with …'
+            # 3+ dots before newline: JSON-encodes as ...\n which WAF sees as ..\ path traversal
+            (
+                r"\.{3,}(?=\n)",
+                "\u2026",
+            ),  # Replace ...\n (or ....\n) with unicode ellipsis
         ],
         "xss": [
             (r"<script[^>]*>", "[SCRIPT_TAG]"),
