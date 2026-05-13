@@ -220,6 +220,11 @@ class CloudFrontWAFSanitizer:
                 r"\.{3,}(?=\n)",
                 "\u2026",
             ),  # Replace ...\n (or ....\n) with unicode ellipsis
+            # 3+ dots before JSON-escaped newline (tool results, nested JSON)
+            (
+                r"\.{3,}(?=\\n)",
+                "\u2026",
+            ),  # Replace ...\\n with unicode ellipsis
         ],
         "xss": [
             (r"<script[^>]*>", "[SCRIPT_TAG]"),

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.53] - 2026-05-13
+
+### Fixed
+- **JSON-escaped newline WAF block:** `...\n` (literal backslash-n from tool results/nested JSON) now sanitized alongside real `...\n`. Prevents CloudFront path traversal detection when `json.dumps()` serializes `...\n` as `...\\n`.
+
 ## [0.5.52] - 2026-05-13
 
 ### Changed

@@ -1072,6 +1072,43 @@ class TestCloudFrontWAFError:
         assert "....\n" not in sanitized
         assert "\u2026" in sanitized
 
+    def test_ellipsis_json_escaped_newline_waf_trigger(self):
+        r"""Test that ...\\n (JSON-escaped newline) is sanitized."""
+        # Tool results arrive as JSON strings where \n is literal backslash-n
+        content = r"Search result: order shipped...\nNext line here"
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized
+        assert r"...\n" not in sanitized
+        assert "\u2026" in sanitized
+
+    def test_four_dots_json_escaped_newline_waf_trigger(self):
+        r"""Test that ....\\n (4+ dots, JSON-escaped) is also sanitized."""
+        content = r"text....\nmore"
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized
+        assert r"....\n" not in sanitized
+
+    def test_two_dots_json_escaped_newline_not_affected(self):
+        r"""Test that ..\\n (only 2 dots) is NOT caught by ellipsis rule."""
+        content = r"hello..\nworld"
+        sanitized, _ = CloudFrontWAFSanitizer.sanitize(content)
+        # 2 dots + \n triggers path_traversal ..\  rule (expected), NOT the ellipsis rule
+        # The key assertion: no unicode ellipsis should be produced
+        assert "\u2026" not in sanitized
+
+    def test_json_escaped_newline_production_tool_result(self):
+        r"""Test production tool result with mixed ...\\n patterns."""
+        content = (
+            r"Result 1: shipped...\n"
+            r"Result 2: contacted...\n\n"
+            r"Result 3: update....\n"
+        )
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(content)
+        assert was_sanitized
+        assert r"...\n" not in sanitized
+        assert r"....\n" not in sanitized
+        assert "\u2026" in sanitized
+
     def test_exception_exported_from_init(self):
         """Test that CloudFrontWAFError is exported from floship_llm.__init__."""
         from floship_llm import CloudFrontWAFError as ImportedError
