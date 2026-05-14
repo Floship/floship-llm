@@ -286,6 +286,11 @@ class CloudFrontWAFSanitizer:
             # JIRA table header ||Cell|| - double pipes may trigger UNION-like detection
             (r"\|\|([^|]+)\|\|", r"[TABLE_CELL:\1]"),
         ],
+        "markdown_links": [
+            # Dense markdown links trigger WAF (path-like patterns inside parens)
+            # Strip syntax, keep link text: [text](url) → text
+            (r"\[([^\]]+)\]\([^)]+\)", r"\1"),
+        ],
     }
 
     # Reverse mappings for desanitization (restore original content from LLM responses)
@@ -1810,6 +1815,28 @@ class LLM:
                 )
         else:
             raise ValueError("Input must be a string or list of strings.")
+
+        # Sanitize input to prevent CloudFront WAF blocks
+        if self.waf_config.enable_waf_sanitization:
+            if isinstance(input, str):
+                input, was_sanitized = CloudFrontWAFSanitizer.sanitize(input)
+                if was_sanitized:
+                    self.waf_metrics.sanitized_requests += 1
+                    logger.debug("Sanitized embedding input (single string)")
+            elif isinstance(input, list):
+                sanitized_any = False
+                sanitized_inputs = []
+                for text in input:
+                    sanitized_text, was_sanitized = CloudFrontWAFSanitizer.sanitize(
+                        text
+                    )
+                    sanitized_inputs.append(sanitized_text)
+                    if was_sanitized:
+                        sanitized_any = True
+                input = sanitized_inputs
+                if sanitized_any:
+                    self.waf_metrics.sanitized_requests += 1
+                    logger.debug("Sanitized embedding input (list)")
 
         params = self.get_embedding_params()
         logger.info(f"Generating embeddings with parameters: {params}")

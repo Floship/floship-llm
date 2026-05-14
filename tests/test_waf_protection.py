@@ -1136,3 +1136,24 @@ class TestCloudFrontWAFError:
         assert "Context: prompt()" in error_str
         assert "Message count: 2" in error_str
         assert "python_exec" in error_str
+
+    def test_markdown_links_sanitized(self):
+        """Markdown links are stripped to plain text."""
+        text = "[Related Documentation](../automation-rules/overview.md) [Order States](../orders/order-states.md)"
+        sanitized, was_sanitized = CloudFrontWAFSanitizer.sanitize(text)
+        assert was_sanitized is True
+        assert "Related Documentation" in sanitized
+        assert "Order States" in sanitized
+        assert "](../" not in sanitized
+
+    def test_markdown_links_dense_block(self):
+        """Dense markdown link blocks are fully sanitized."""
+        text = "[A](url1) [B](url2) [C](url3)"
+        sanitized, _ = CloudFrontWAFSanitizer.sanitize(text)
+        assert sanitized == "A B C"
+
+    def test_markdown_links_no_false_positive(self):
+        """Plain brackets without link syntax are not affected."""
+        text = "array[0] = value(1)"
+        sanitized, _was_sanitized = CloudFrontWAFSanitizer.sanitize(text)
+        assert "array[0] = value(1)" in sanitized

@@ -468,3 +468,76 @@ class TestEmbedRetry:
             # Verify retry handler was called
             assert mock_retry.called
             assert result == [0.1, 0.2, 0.3]
+
+
+class TestEmbedWAFSanitization:
+    """Test that embed() sanitizes input before sending to API."""
+
+    @patch("floship_llm.client.OpenAI")
+    def test_embed_sanitizes_markdown_links(self, mock_openai):
+        """Markdown links in embed input are sanitized before API call."""
+        llm = LLM(type="embedding")
+
+        mock_response = Mock()
+        mock_response.data = [Mock(embedding=[0.1, 0.2, 0.3], index=0)]
+        mock_openai.return_value.embeddings.create.return_value = mock_response
+
+        text = "[Related Docs](../automation-rules/overview.md) [Orders](../orders/states.md)"
+        llm.embed(text)
+
+        # Verify the API was called with sanitized input (no markdown link syntax)
+        call_kwargs = mock_openai.return_value.embeddings.create.call_args
+        sent_input = call_kwargs.kwargs.get("input") or call_kwargs[1].get("input")
+        assert "](../" not in sent_input
+        assert "Related Docs" in sent_input
+
+    @patch("floship_llm.client.OpenAI")
+    def test_embed_sanitizes_list_input(self, mock_openai):
+        """List input with markdown links is sanitized."""
+        llm = LLM(type="embedding")
+
+        mock_response = Mock()
+        mock_response.data = [
+            Mock(embedding=[0.1, 0.2], index=0),
+            Mock(embedding=[0.3, 0.4], index=1),
+        ]
+        mock_openai.return_value.embeddings.create.return_value = mock_response
+
+        texts = ["[Link](../path/file.md) text", "Normal text"]
+        llm.embed(texts)
+
+        call_kwargs = mock_openai.return_value.embeddings.create.call_args
+        sent_input = call_kwargs.kwargs.get("input") or call_kwargs[1].get("input")
+        assert "](../" not in sent_input[0]
+        assert "Link" in sent_input[0]
+        assert sent_input[1] == "Normal text"
+
+    @patch("floship_llm.client.OpenAI")
+    def test_embed_sanitization_updates_metrics(self, mock_openai):
+        """Sanitization in embed() increments sanitized_requests."""
+        llm = LLM(type="embedding")
+
+        mock_response = Mock()
+        mock_response.data = [Mock(embedding=[0.1, 0.2, 0.3], index=0)]
+        mock_openai.return_value.embeddings.create.return_value = mock_response
+
+        initial = llm.waf_metrics.sanitized_requests
+        llm.embed("[Link](../path) content")
+        assert llm.waf_metrics.sanitized_requests == initial + 1
+
+    @patch("floship_llm.client.OpenAI")
+    def test_embed_no_sanitization_when_disabled(self, mock_openai):
+        """Sanitization is skipped when WAF is disabled."""
+        llm = LLM(type="embedding", enable_waf_sanitization=False)
+
+        mock_response = Mock()
+        mock_response.data = [Mock(embedding=[0.1, 0.2, 0.3], index=0)]
+        mock_openai.return_value.embeddings.create.return_value = mock_response
+
+        text = "[Link](../path/file.md) content"
+        llm.embed(text)
+
+        call_kwargs = mock_openai.return_value.embeddings.create.call_args
+        sent_input = call_kwargs.kwargs.get("input") or call_kwargs[1].get("input")
+        # Should still have the original markdown link syntax
+        assert "](../" in sent_input

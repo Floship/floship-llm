@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.54] - 2026-05-14
+
+### Added
+- **WAF sanitization for `embed()` method:** Embedding inputs are now sanitized before sending to the API, preventing CloudFront 403 blocks on dense markdown links and path-like patterns.
+- **Markdown link WAF pattern:** `[text](url)` syntax (especially with `../` relative paths) is stripped to plain text before sending, as dense link blocks trigger CloudFront path traversal detection.
+
 ## [0.5.53] - 2026-05-13
 
 ### Fixed
