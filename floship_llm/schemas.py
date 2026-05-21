@@ -1,8 +1,19 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field
+
+
+@dataclass
+class CacheInfo:
+    """Information about an active context cache."""
+
+    cached: bool
+    token_count: int
+    ttl_remaining: int  # seconds
+    cache_name: str
 
 
 class ThinkingModel(BaseModel):

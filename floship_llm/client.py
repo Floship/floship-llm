@@ -20,6 +20,7 @@ from openai import (
 )
 from pydantic import BaseModel, Field
 
+from .backends.openai_compat import OpenAICompatibleBackend
 from .content_processor import ContentProcessor
 from .retry_handler import RetryHandler
 from .schemas import ThinkingModel, ToolCall, ToolFunction, ToolResult
@@ -581,27 +582,121 @@ class LLM:
             kwargs.get("inference_key")
             or kwargs.get("api_key")
             or os.environ.get("INFERENCE_KEY")
+            or os.environ.get("GEMINI_API_KEY")
         )
-        if not self.api_key:
+        # Vertex AI uses Application Default Credentials -- no explicit key needed
+        if not self.api_key and self._detect_provider(self.base_url) != "vertex":
             raise ValueError(
-                "API key must be provided via inference_key/api_key parameter or INFERENCE_KEY environment variable"
+                "API key must be provided via inference_key/api_key parameter "
+                "or INFERENCE_KEY/GEMINI_API_KEY environment variable"
             )
-
-        self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
         # Auto-detect provider from base URL
         self._provider = self._detect_provider(self.base_url)
 
-        # Auto-disable WAF sanitization for non-Heroku providers (no CloudFront)
-        if self._provider != "heroku" and "enable_waf_sanitization" not in kwargs:
-            self.waf_config.enable_waf_sanitization = False
+        # Check for native Gemini backend opt-in
+        # Vertex AI URLs auto-enable the native backend
+        self._use_native_gemini = kwargs.get(
+            "native_google",
+            os.environ.get("GEMINI_NATIVE", "").lower() in ("true", "1", "yes")
+            or self._provider == "vertex",
+        )
 
-        # Model configuration
+        # Context caching options (native Gemini only)
+        self._cache = kwargs.get(
+            "cache",
+            os.environ.get("GEMINI_CACHE", "").lower() in ("true", "1", "yes"),
+        )
+        self._cache_ttl = int(
+            kwargs.get("cache_ttl", os.environ.get("GEMINI_CACHE_TTL", "3600"))
+        )
+
+        # Phase 5 -- native-only feature options
+        self._safety_settings = kwargs.get("safety_settings")
+        self._grounding = kwargs.get("grounding", False)
+        self._code_execution = kwargs.get("code_execution", False)
+
+        # Phase 6 -- Vertex AI options
+        self._google_project = kwargs.get(
+            "google_project", os.environ.get("GOOGLE_PROJECT")
+        )
+        self._google_location = kwargs.get(
+            "google_location", os.environ.get("GOOGLE_LOCATION")
+        )
+
+        # Google context caching (OpenAI-compatible chat path)
+        self._enable_context_cache = kwargs.get(
+            "enable_context_cache",
+            os.environ.get("FLOSHIP_LLM_CONTEXT_CACHE", "").lower()
+            in ("true", "1", "yes"),
+        )
+        self._context_cache_ttl = int(
+            kwargs.get(
+                "context_cache_ttl_seconds",
+                os.environ.get("FLOSHIP_LLM_CONTEXT_CACHE_TTL", "300"),
+            )
+        )
+        self._context_cache_min_tokens = int(
+            kwargs.get(
+                "context_cache_min_tokens",
+                os.environ.get("FLOSHIP_LLM_CONTEXT_CACHE_MIN_TOKENS", "8000"),
+            )
+        )
+        self._context_cache_version = kwargs.get(
+            "context_cache_version",
+            os.environ.get("FLOSHIP_LLM_CONTEXT_CACHE_VERSION", ""),
+        )
+        self._context_cache_scope = kwargs.get("context_cache_scope", "global_static")
+        self._context_cache_expected_reuse = int(
+            kwargs.get("context_cache_expected_reuse", 3)
+        )
+        self._context_cache_contents: list[str] | None = kwargs.get(
+            "context_cache_contents"
+        )
+
+        # Normalize base URL for provider compatibility
+        self.base_url = self._normalize_base_url(self.base_url, self._provider)
+
+        # Model configuration (resolved early so the backend can use it)
         self.model = kwargs.get("model") or os.environ.get("INFERENCE_MODEL_ID", "")
         if not self.model:
             raise ValueError(
                 "Model must be provided via model parameter or INFERENCE_MODEL_ID environment variable"
             )
+
+        if self._use_native_gemini:
+            # Native Gemini -- no OpenAI client needed
+            self.backend = self._create_backend(openai_client=None)
+            self.client = None
+        else:
+            self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
+            self.backend = self._create_backend(openai_client=self.client)
+
+        # Google context cache manager (OpenAI-compatible path)
+        self._google_cache_manager = None
+        self._active_cache_ref = None
+        if (
+            self._enable_context_cache
+            and self._provider == "google"
+            and not self._use_native_gemini
+        ):
+            try:
+                from .google_cache_manager import GoogleCacheManager
+
+                self._google_cache_manager = GoogleCacheManager(
+                    api_key=self.api_key,
+                    default_ttl_seconds=self._context_cache_ttl,
+                    min_tokens=self._context_cache_min_tokens,
+                )
+            except ImportError:
+                logger.warning(
+                    "Context caching requires google-genai. "
+                    "Install with: pip install floship-llm[google]"
+                )
+
+        # Auto-disable WAF sanitization for non-Heroku providers (no CloudFront)
+        if self._provider != "heroku" and "enable_waf_sanitization" not in kwargs:
+            self.waf_config.enable_waf_sanitization = False
 
         # Auto-map Heroku-specific embedding models for Google AI provider
         _GOOGLE_EMBEDDING_MODEL_MAP = {
@@ -772,23 +867,283 @@ class LLM:
         Returns:
             'google' for Google AI (generativelanguage.googleapis.com)
             'heroku' for Heroku Inference API
-            'other' for unknown providers
+            'vertex' for Google Cloud Vertex AI
+            'openai_compatible' for unknown/generic OpenAI-compatible providers
         """
         if not base_url:
-            return "other"
+            return "openai_compatible"
         url_lower = base_url.lower()
+        if "aiplatform.googleapis.com" in url_lower:
+            return "vertex"
         if "generativelanguage.googleapis.com" in url_lower:
             return "google"
         if "inference.heroku.com" in url_lower:
             return "heroku"
-        return "other"
+        return "openai_compatible"
+
+    @staticmethod
+    def _normalize_base_url(url: str, provider: str) -> str:
+        """Normalize base URL for provider compatibility.
+
+        Google AI requires the /openai/ path suffix for OpenAI-compatible
+        endpoints. Auto-fixes the URL if the suffix is missing.
+
+        Args:
+            url: The base URL to normalize
+            provider: The detected provider ('google', 'heroku', 'openai_compatible')
+
+        Returns:
+            Normalized base URL
+        """
+        if not url:
+            return url
+        url = url.rstrip("/") + "/"
+        if provider == "google" and "/openai/" not in url:
+            url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+        return url
+
+    def _create_backend(self, openai_client: Any) -> Any:
+        """Create the provider backend for API calls.
+
+        Args:
+            openai_client: The OpenAI client instance to wrap (None for native Gemini).
+
+        Returns:
+            A ProviderBackend instance.
+        """
+        if self._use_native_gemini:
+            from .backends.native_gemini import NativeGeminiBackend
+
+            return NativeGeminiBackend(
+                api_key=self.api_key,
+                model=self.model,
+                cache=self._cache,
+                cache_ttl=self._cache_ttl,
+                safety_settings=self._safety_settings,
+                grounding=self._grounding,
+                code_execution=self._code_execution,
+                vertex=self._provider == "vertex",
+                project=self._google_project,
+                location=self._google_location,
+            )
+        return OpenAICompatibleBackend(client=openai_client, provider=self._provider)
+
+    @property
+    def cache_info(self):
+        """Return context cache info, or None if not cached.
+
+        Returns a ``CacheInfo`` instance when the native Gemini backend is
+        active and a cache is live, otherwise ``None``.
+        """
+        if not hasattr(self, "backend") or not self.backend.supports_caching:
+            return None
+        raw = self.backend.get_cache_info()
+        if raw is None:
+            return None
+        from .schemas import CacheInfo
+
+        return CacheInfo(**raw)
+
+    def clear_cache(self) -> None:
+        """Invalidate the current context cache (native Gemini only)."""
+        if hasattr(self, "backend"):
+            self.backend.clear_cache()
+
+    def count_tokens(
+        self,
+        message: str | None = None,
+        *,
+        messages: list[dict[str, Any]] | None = None,
+    ) -> int:
+        """Count tokens for a message or message list.
+
+        Uses the native Gemini ``countTokens`` API when available.
+        Falls back to a rough estimate (1 token per 4 chars) for
+        backends that do not support native counting.
+
+        Args:
+            message: A single text string to count.
+            messages: A list of OpenAI-style message dicts.
+
+        Returns:
+            Token count (exact for native, estimated otherwise).
+        """
+        if messages is None:
+            messages = [{"role": "user", "content": message or ""}]
+        try:
+            return self.backend.count_tokens(messages)
+        except NotImplementedError:
+            # Rough estimate: ~4 chars per token
+            total_chars = sum(len(m.get("content", "") or "") for m in messages)
+            return max(1, total_chars // 4)
+
+    def upload_file(self, path: str, mime_type: str | None = None) -> Any:
+        """Upload a file via the native Gemini media API.
+
+        Requires ``native_google=True``.  The returned file reference can
+        be used in prompt content parts.
+
+        Args:
+            path: Local file path to upload.
+            mime_type: Optional MIME type override.
+
+        Returns:
+            A file reference object.
+
+        Raises:
+            NotImplementedError: If the backend does not support file upload.
+        """
+        if not self.backend.supports_file_upload:
+            raise NotImplementedError(
+                "File upload requires native_google=True. Use: LLM(native_google=True)"
+            )
+        return self.backend.upload_file(path, mime_type)
+
+    # -- Google context caching (OpenAI-compatible path) --------------------
+
+    def create_context_cache(
+        self,
+        *,
+        system: str | None = None,
+        contents: list[Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
+        ttl_seconds: int | None = None,
+        display_name: str | None = None,
+        version: str | None = None,
+        permission_hash: str | None = None,
+    ) -> Any:
+        """Create (or reuse) a Google context cache for static content.
+
+        The returned reference can be passed to ``prompt()`` via
+        ``cached_content=ref.name`` or used automatically when
+        ``enable_context_cache=True``.
+
+        Requires ``provider == "google"`` and the ``google-genai``
+        package.
+
+        Args:
+            system: System prompt to cache.
+            contents: List of static content strings (docs, KB, etc.).
+            tools: Tool schemas (OpenAI format) to cache.
+            ttl_seconds: Cache TTL override (default from init).
+            display_name: Human-readable cache name.
+            version: Content version string for the cache key.
+            permission_hash: Permission/role hash for scoped caches.
+
+        Returns:
+            A ``ContextCacheRef`` with ``.name`` for use in requests.
+
+        Raises:
+            RuntimeError: If the cache manager is not available.
+        """
+        if self._google_cache_manager is None:
+            raise RuntimeError(
+                "Context caching requires provider='google', "
+                "enable_context_cache=True, and google-genai installed."
+            )
+        return self._google_cache_manager.create_or_get(
+            model=self.model,
+            system=system,
+            contents=contents,
+            tools=tools,
+            version=version or self._context_cache_version,
+            ttl_seconds=ttl_seconds,
+            display_name=display_name,
+            permission_hash=permission_hash,
+        )
+
+    def delete_context_cache(self, name: str | None = None) -> None:
+        """Delete a context cache by name, or the active auto-cache."""
+        if self._google_cache_manager is None:
+            return
+        target = name or (
+            self._active_cache_ref.name if self._active_cache_ref else None
+        )
+        if target:
+            self._google_cache_manager.delete(target)
+        if self._active_cache_ref and (
+            name is None or name == self._active_cache_ref.name
+        ):
+            self._active_cache_ref = None
+
+    @property
+    def context_cache_ref(self) -> Any:
+        """The currently active context cache reference, or ``None``."""
+        return self._active_cache_ref
+
+    def _ensure_context_cache(self) -> Any:
+        """Auto-create a context cache from the current static context.
+
+        Called before chat requests when ``enable_context_cache=True``.
+        Returns a ``ContextCacheRef`` or ``None`` if caching conditions
+        are not met (wrong provider, below token threshold, etc.).
+        """
+        if self._google_cache_manager is None:
+            return None
+
+        # Gather static context: system prompt + tool schemas + extra contents
+        system = None
+        for msg in self.messages:
+            if msg.get("role") == "system":
+                system = msg.get("content", "")
+                break
+
+        tools = None
+        if self.enable_tools and self.tool_manager.tools:
+            tools = self.tool_manager.get_tools_schema()
+
+        contents = self._context_cache_contents
+
+        # Nothing cacheable
+        if not system and not tools and not contents:
+            return None
+
+        ref = self._google_cache_manager.create_or_get(
+            model=self.model,
+            system=system,
+            contents=contents,
+            tools=tools,
+            version=self._context_cache_version,
+        )
+        self._active_cache_ref = ref
+        return ref
+
+    def _strip_cached_context(
+        self, messages: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Remove system messages and tool schemas already in the cache.
+
+        When a cache ref is active, the static context is already on the
+        server side.  Sending it again wastes tokens and money.
+        """
+        return [m for m in messages if m.get("role") != "system"]
+
+    def _should_sanitize_for_waf(self) -> bool:
+        """Check whether WAF sanitization should be applied.
+
+        WAF sanitization is enabled by default for Heroku (which uses CloudFront)
+        and disabled for all other providers unless explicitly overridden.
+
+        Returns:
+            True if WAF sanitization should be applied
+        """
+        if not self.waf_config.enable_waf_sanitization:
+            return False
+        return self._provider == "heroku"
 
     def _validate_environment(self):
         """Validate required environment variables."""
-        required_vars = ["INFERENCE_URL", "INFERENCE_MODEL_ID", "INFERENCE_KEY"]
-        for var in required_vars:
-            if not os.environ.get(var):
-                raise ValueError(f"{var} environment variable must be set.")
+        if not os.environ.get("INFERENCE_URL"):
+            raise ValueError("INFERENCE_URL environment variable must be set.")
+        if not os.environ.get("INFERENCE_MODEL_ID"):
+            raise ValueError("INFERENCE_MODEL_ID environment variable must be set.")
+        # Vertex AI uses Application Default Credentials -- no explicit key needed
+        inference_url = os.environ.get("INFERENCE_URL", "")
+        if "aiplatform.googleapis.com" not in inference_url.lower():
+            if not (
+                os.environ.get("INFERENCE_KEY") or os.environ.get("GEMINI_API_KEY")
+            ):
+                raise ValueError("INFERENCE_KEY environment variable must be set.")
 
     # ========== CloudFront WAF Protection ==========
 
@@ -912,6 +1267,23 @@ class LLM:
 
         error_str = str(error).lower()
         return "408" in error_str or "request timed out" in error_str
+
+    def _log_provider_error_context(self, error: Exception) -> None:
+        """Log enhanced error context for provider-specific errors.
+
+        Adds helpful diagnostic messages for common provider errors,
+        such as model-not-found (404) on Google AI.
+        """
+        if not isinstance(error, APIStatusError):
+            return
+        status_code = error.response.status_code if error.response else None
+        if status_code == 404 and self._provider == "google":
+            logger.error(
+                "Model not found for Google AI provider. "
+                "Check INFERENCE_MODEL_ID='%s' and API availability at %s",
+                self.model,
+                self.base_url,
+            )
 
     def _should_disable_extended_thinking(self, error: Exception) -> bool:
         """
@@ -1799,12 +2171,17 @@ class LLM:
         if self.max_completion_tokens is not None:
             params["max_completion_tokens"] = self.max_completion_tokens
 
-        if self.top_k is not None:
+        if self.top_k is not None and self._provider == "heroku":
             extra_body["top_k"] = self.top_k
 
         # Only add extended_thinking if it should be enabled (Heroku/Claude only)
         if has_extended_thinking and self.extended_thinking is not None:
             extra_body["extended_thinking"] = self.extended_thinking
+
+        # Google context cache: inject cached_content into extra_body
+        cache_ref = self._active_cache_ref
+        if cache_ref and cache_ref.is_valid() and self._provider == "google":
+            extra_body["cached_content"] = cache_ref.name
 
         # Add extra_body if it has content
         if extra_body:
@@ -1838,7 +2215,11 @@ class LLM:
             "model": self.model,
         }
 
-        # Add optional parameters if specified
+        # Google AI doesn't support Heroku-specific embedding params
+        if self._provider == "google":
+            return params
+
+        # Add optional parameters if specified (Heroku/other providers)
         if self.input_type is not None:
             params["input_type"] = self.input_type
 
@@ -1922,7 +2303,7 @@ class LLM:
             raise ValueError("Input must be a string or list of strings.")
 
         # Sanitize input to prevent CloudFront WAF blocks
-        if self.waf_config.enable_waf_sanitization:
+        if self._should_sanitize_for_waf():
             if isinstance(input, str):
                 input, was_sanitized = CloudFrontWAFSanitizer.sanitize(input)
                 if was_sanitized:
@@ -1956,7 +2337,7 @@ class LLM:
 
         try:
             response = self.retry_handler.execute_with_retry(
-                self.client.embeddings.create, **params, input=input
+                self.backend.embed, **params, input=input
             )
 
             # Return full response if requested
@@ -2006,8 +2387,10 @@ class LLM:
                 )
             self.waf_metrics.failed_requests += 1
             raise
-        except Exception:
+        except Exception as e:
             self.waf_metrics.failed_requests += 1
+            self._log_provider_error_context(e)
+            raise
             raise
 
     def prompt(
@@ -2017,6 +2400,8 @@ class LLM:
         retry: bool = False,
         stream_final_response: bool = False,
         force_no_stream: bool = False,
+        cached_content: Optional[str] = None,
+        cache_static_context: bool = False,
     ) -> Any:
         """
         Generate completion from prompt with automatic CloudFront WAF protection.
@@ -2090,7 +2475,7 @@ class LLM:
             self.retry_count = 0
 
             # Apply WAF sanitization (only to string content)
-            if self.waf_config.enable_waf_sanitization:
+            if self._should_sanitize_for_waf():
                 if isinstance(prompt, str):
                     prompt = self._sanitize_for_waf(prompt)
                 elif isinstance(prompt, list):
@@ -2126,6 +2511,35 @@ class LLM:
                 # Validate messages before sending
                 validated_messages = self._validate_messages_for_api(self.messages)
 
+                # Google context caching: auto-create or use explicit ref
+                if cached_content and self._provider == "google":
+                    from .google_cache_manager import ContextCacheRef
+
+                    self._active_cache_ref = ContextCacheRef(
+                        name=cached_content,
+                        key="manual",
+                        model=self.model,
+                        expires_at=time.time() + self._context_cache_ttl,
+                    )
+                elif cache_static_context or self._enable_context_cache:
+                    self._ensure_context_cache()
+
+                # When cache is active, strip cached content from messages
+                if (
+                    self._active_cache_ref
+                    and self._active_cache_ref.is_valid()
+                    and self._provider == "google"
+                ):
+                    validated_messages = self._strip_cached_context(validated_messages)
+                    # Tools are already in the cache -- don't send twice
+                    params.pop("tools", None)
+                    params.pop("tool_choice", None)
+                    # Inject cached_content into extra_body (ref may have
+                    # been created after get_request_params())
+                    if "extra_body" not in params:
+                        params["extra_body"] = {}
+                    params["extra_body"]["cached_content"] = self._active_cache_ref.name
+
                 if self.verbosity >= 2:
                     logger.debug("FULL REQUEST DATA:")
                     logger.debug(f"Params: {json.dumps(params, default=str)}")
@@ -2140,7 +2554,7 @@ class LLM:
 
                     # Use retry handler for streaming requests too
                     def streaming_request():
-                        stream = self.client.chat.completions.create(
+                        stream = self.backend.chat(
                             **params, messages=validated_messages
                         )
                         full_response = ""
@@ -2160,7 +2574,7 @@ class LLM:
                 else:
                     # Non-streaming mode (for tools)
                     response = self.retry_handler.execute_with_retry(
-                        self.client.chat.completions.create,
+                        self.backend.chat,
                         **params,
                         messages=validated_messages,
                     )
@@ -2270,13 +2684,20 @@ class LLM:
                     self._raise_waf_error(e, "prompt method")
 
                 self.waf_metrics.failed_requests += 1
+                self._log_provider_error_context(e)
 
                 if self.waf_config.debug_mode:
                     logger.error(f"Request failed: {type(e).__name__}: {str(e)[:200]}")
 
                 raise
 
-    def prompt_stream(self, prompt: str, system: Optional[str] = None):
+    def prompt_stream(
+        self,
+        prompt: str,
+        system: Optional[str] = None,
+        cached_content: Optional[str] = None,
+        cache_static_context: bool = False,
+    ):
         """
         Generate streaming completion from prompt with CloudFront WAF protection.
 
@@ -2318,7 +2739,7 @@ class LLM:
         self._current_tool_metadata = []
 
         # Sanitize content if enabled
-        if self.waf_config.enable_waf_sanitization:
+        if self._should_sanitize_for_waf():
             prompt = self._sanitize_for_waf(prompt)
             if system:
                 system = self._sanitize_for_waf(system)
@@ -2342,13 +2763,37 @@ class LLM:
                 params = self.get_request_params()
                 validated_messages = self._validate_messages_for_api(self.messages)
 
+                # Google context caching: auto-create or use explicit ref
+                if cached_content and self._provider == "google":
+                    from .google_cache_manager import ContextCacheRef
+
+                    self._active_cache_ref = ContextCacheRef(
+                        name=cached_content,
+                        key="manual",
+                        model=self.model,
+                        expires_at=time.time() + self._context_cache_ttl,
+                    )
+                elif cache_static_context or self._enable_context_cache:
+                    self._ensure_context_cache()
+
+                # When cache is active, strip cached content from messages
+                if (
+                    self._active_cache_ref
+                    and self._active_cache_ref.is_valid()
+                    and self._provider == "google"
+                ):
+                    validated_messages = self._strip_cached_context(validated_messages)
+                    params.pop("tools", None)
+                    params.pop("tool_choice", None)
+                    if "extra_body" not in params:
+                        params["extra_body"] = {}
+                    params["extra_body"]["cached_content"] = self._active_cache_ref.name
+
                 # Enable streaming
                 params["stream"] = True
 
                 # Make streaming request (no retry for streaming)
-                stream = self.client.chat.completions.create(
-                    **params, messages=validated_messages
-                )
+                stream = self.backend.chat(**params, messages=validated_messages)
 
                 full_response = ""
 
@@ -2422,6 +2867,7 @@ class LLM:
                     self._raise_waf_error(e, "prompt_stream method")
 
                 self.waf_metrics.failed_requests += 1
+                self._log_provider_error_context(e)
                 if self.waf_config.debug_mode:
                     logger.error(f"Streaming error: {type(e).__name__}: {str(e)[:200]}")
                 self.extended_thinking = original_extended_thinking
@@ -3013,9 +3459,7 @@ class LLM:
 
             # Make streaming request with WAF error handling
             try:
-                stream = self.client.chat.completions.create(
-                    **params, messages=validated_messages
-                )
+                stream = self.backend.chat(**params, messages=validated_messages)
             except BadRequestError as e:
                 # Handle 400 Extended Thinking validation error
                 if self._should_disable_extended_thinking(e):
@@ -3030,7 +3474,7 @@ class LLM:
                     retry_params = self.get_request_params()
                     retry_params["stream"] = True
                     validated_messages = self._validate_messages_for_api(self.messages)
-                    stream = self.client.chat.completions.create(
+                    stream = self.backend.chat(
                         **retry_params, messages=validated_messages
                     )
                 else:
@@ -3056,7 +3500,7 @@ class LLM:
                     params["stream"] = False
                     try:
                         follow_up_response = self.retry_handler.execute_with_retry(
-                            self.client.chat.completions.create,
+                            self.backend.chat,
                             **params,
                             messages=validated_messages,
                         )
@@ -3124,7 +3568,7 @@ class LLM:
                             try:
                                 follow_up_response = (
                                     self.retry_handler.execute_with_retry(
-                                        self.client.chat.completions.create,
+                                        self.backend.chat,
                                         **params,
                                         messages=validated_messages,
                                     )
@@ -3191,7 +3635,7 @@ class LLM:
             # Non-streaming follow-up (original behavior)
             try:
                 follow_up_response = self.retry_handler.execute_with_retry(
-                    self.client.chat.completions.create,
+                    self.backend.chat,
                     **params,
                     messages=validated_messages,
                 )
@@ -3280,7 +3724,7 @@ class LLM:
                         # Retry once with simplified context
                         try:
                             follow_up_response = self.retry_handler.execute_with_retry(
-                                self.client.chat.completions.create,
+                                self.backend.chat,
                                 **params,
                                 messages=validated_messages,
                             )
@@ -3314,7 +3758,7 @@ class LLM:
                                 try:
                                     follow_up_response = (
                                         self.retry_handler.execute_with_retry(
-                                            self.client.chat.completions.create,
+                                            self.backend.chat,
                                             **fallback_params,
                                             messages=self._validate_messages_for_api(
                                                 fallback_messages
@@ -3353,7 +3797,7 @@ class LLM:
                             self.messages
                         )
                         follow_up_response = self.retry_handler.execute_with_retry(
-                            self.client.chat.completions.create,
+                            self.backend.chat,
                             **retry_params,
                             messages=validated_messages,
                         )
@@ -3529,6 +3973,9 @@ class LLM:
                     validated_msg["tool_calls"] = self._sanitize_tool_calls(
                         tool_calls, i
                     )
+                    # Persist back to original message so concatenated args
+                    # are not re-split on subsequent rounds.
+                    msg["tool_calls"] = validated_msg["tool_calls"]
                 # Gemini 3+: inject dummy thought_signature if missing.
                 # Google AI requires thought_signature on the first functionCall
                 # in each step of the current turn. If callers (e.g. streaming
@@ -3642,6 +4089,9 @@ class LLM:
                     validated_msg["tool_calls"] = self._sanitize_tool_calls(
                         tool_calls, i
                     )
+                    # Persist back to original message so concatenated args
+                    # are not re-split on subsequent rounds.
+                    msg["tool_calls"] = validated_msg["tool_calls"]
 
             validated_messages.append(validated_msg)
 

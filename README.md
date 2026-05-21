@@ -11,18 +11,86 @@ Python library for Heroku Managed Inference API and OpenAI-compatible endpoints.
 - 🧠 Extended thinking for Claude models
 - 🔄 Continuous conversations and retry mechanisms
 - 📐 Embeddings support
+- 🌐 Native Gemini SDK backend (optional)
+- ☁️ Vertex AI support with ADC auth
+- 💾 Google context caching (cost optimization)
 
 ## Installation
 
 ```bash
 pip install floship-llm
 
+# With Google/Vertex AI support
+pip install floship-llm[google]
+
 # From source
 git clone https://github.com/floship/floship-llm.git && cd floship-llm && pip install -e .
 
 # Development (with uv)
-uv sync --dev && uv run pytest
+uv sync --all-extras --dev && uv run pytest
 ```
+
+## Provider Switching
+
+This library supports Heroku Inference and Google AI OpenAI-compatible endpoints.
+
+### Heroku Inference
+
+```bash
+export INFERENCE_URL="https://us.inference.heroku.com"
+export INFERENCE_MODEL_ID="claude-4-sonnet"
+export INFERENCE_KEY="your-heroku-key"
+```
+
+### Google AI
+
+```bash
+export INFERENCE_URL="https://generativelanguage.googleapis.com/v1beta/openai/"
+export INFERENCE_MODEL_ID="gemini-3.5-flash"
+export INFERENCE_KEY="your-google-ai-key"
+```
+
+The provider is auto-detected from `INFERENCE_URL`. Google AI URLs without the `/openai/` suffix are auto-normalized.
+
+### Vertex AI
+
+```bash
+export INFERENCE_URL="https://us-central1-aiplatform.googleapis.com/"
+export INFERENCE_MODEL_ID="gemini-3.5-flash"
+export GOOGLE_PROJECT="my-project"
+export GOOGLE_LOCATION="us-central1"
+# No INFERENCE_KEY needed -- uses Application Default Credentials (ADC)
+```
+
+### Native Gemini Backend
+
+Opt-in to the native `google-genai` SDK for access to file upload, token counting, and caching:
+
+```bash
+export GEMINI_NATIVE=true
+```
+
+Or via constructor:
+
+```python
+llm = LLM(native_google=True)
+```
+
+Vertex AI URLs auto-enable the native backend.
+
+| Feature | Heroku | Google AI | Vertex AI |
+|---------|--------|-----------|----------|
+| Chat completions | yes | yes | yes |
+| Streaming | yes | yes | yes |
+| Tool calling | yes | yes | yes |
+| Vision input | model-dependent | yes | yes |
+| Embeddings | yes | yes | yes |
+| CloudFront WAF sanitization | enabled by default | disabled by default | disabled |
+| Claude extended thinking | yes | no | no |
+| Native Gemini SDK | no | opt-in | auto |
+| Context caching | no | yes | yes |
+| File upload | no | native only | native only |
+| Token counting | no | native only | native only |
 
 ## Quick Start
 
@@ -235,6 +303,76 @@ reasoning = llm.get_last_reasoning()
 
 **Note:** Thinking content is only available after the full response completes.
 
+## Context Caching (Google)
+
+Reduce costs by caching static context (system prompts, tool schemas, documents) server-side. Uses native `google-genai` SDK for cache lifecycle while keeping chat on the OpenAI-compatible path.
+
+### Auto-caching
+
+```python
+llm = LLM(
+    enable_context_cache=True,
+    system="You are a code review assistant with deep knowledge of...",
+    enable_tools=True,
+    tools=[...],
+)
+
+# First call creates the cache, subsequent calls reuse it
+response = llm.prompt("Review this PR diff: ...")
+```
+
+### Manual Cache Management
+
+```python
+from floship_llm import LLM, GoogleCacheManager
+
+llm = LLM(enable_context_cache=True)
+
+# Create cache explicitly
+ref = llm.create_context_cache(
+    system="Large system prompt...",
+    contents=["document1...", "document2..."],
+    version="v2",
+    ttl_seconds=600,
+)
+print(ref.name, ref.token_count)  # cachedContents/abc123, 15000
+
+# Use in request
+response = llm.prompt("Question about the docs", cached_content=ref.name)
+
+# Cleanup
+llm.delete_context_cache(ref.name)
+```
+
+### Cost Break-even Calculator
+
+```python
+from floship_llm import GoogleCacheManager
+
+# Should I cache? (token_count, expected_reuse_count, ttl_hours)
+GoogleCacheManager.should_cache(15000, 5, 1.0)  # True -- saves money
+GoogleCacheManager.should_cache(15000, 2, 24.0)  # False -- TTL too long
+```
+
+### Configuration
+
+```python
+LLM(
+    enable_context_cache=True,         # Enable (or FLOSHIP_LLM_CONTEXT_CACHE=true)
+    context_cache_ttl_seconds=300,     # Default: 300 (5 min)
+    context_cache_min_tokens=8000,     # Min tokens to justify caching
+    context_cache_version="v1",        # Invalidate cache on version bump
+    context_cache_expected_reuse=3,    # Expected reuse count for break-even
+)
+```
+
+| Env Variable | Description |
+|---|---|
+| `FLOSHIP_LLM_CONTEXT_CACHE` | Enable context caching (`true`/`false`) |
+| `FLOSHIP_LLM_CONTEXT_CACHE_TTL` | Cache TTL in seconds (default: 300) |
+| `FLOSHIP_LLM_CONTEXT_CACHE_MIN_TOKENS` | Minimum token count to cache (default: 8000) |
+| `FLOSHIP_LLM_CONTEXT_CACHE_VERSION` | Cache version string |
+
 ## CloudFront WAF Protection
 
 Auto-sanitizes content to prevent 403 errors from patterns like `../`, `<script>`, `javascript:`.
@@ -283,9 +421,18 @@ metrics = llm.get_waf_metrics()
 
 | Variable | Description |
 |----------|-------------|
-| `INFERENCE_URL` | API endpoint (default: `https://us.inference.heroku.com`) |
-| `INFERENCE_MODEL_ID` | Model ID (e.g., `claude-4-sonnet`) |
-| `INFERENCE_KEY` | API key |
+| `INFERENCE_URL` | API endpoint (Heroku, Google AI, or Vertex AI) |
+| `INFERENCE_MODEL_ID` | Model ID (e.g., `claude-4-sonnet`, `gemini-3.5-flash`) |
+| `INFERENCE_KEY` | API key (not required for Vertex AI) |
+| `GEMINI_API_KEY` | Fallback API key for Google AI (used if `INFERENCE_KEY` is not set) |
+| `GEMINI_NATIVE` | Use native google-genai SDK (`true`/`false`) |
+| `GOOGLE_PROJECT` | GCP project ID (Vertex AI) |
+| `GOOGLE_LOCATION` | GCP region (Vertex AI, default: `us-central1`) |
+| `FLOSHIP_LLM_WAF_SANITIZE` | Override WAF sanitization (`true`/`false`) |
+| `FLOSHIP_LLM_CONTEXT_CACHE` | Enable context caching (`true`/`false`) |
+| `FLOSHIP_LLM_CONTEXT_CACHE_TTL` | Cache TTL in seconds (default: 300) |
+| `FLOSHIP_LLM_CONTEXT_CACHE_MIN_TOKENS` | Min tokens to justify caching (default: 8000) |
+| `FLOSHIP_LLM_CONTEXT_CACHE_VERSION` | Cache version string for invalidation |
 
 ### Constructor Parameters
 
@@ -305,6 +452,11 @@ LLM(
     input_tokens_limit=40_000,      # Input token limit
     max_length=100_000,             # Max response length
     enable_waf_sanitization=True,   # CloudFront WAF protection
+    native_google=False,            # Use native google-genai SDK
+    enable_context_cache=False,     # Google context caching
+    context_cache_ttl_seconds=300,  # Cache TTL (default 5 min)
+    context_cache_min_tokens=8000,  # Min tokens to justify caching
+    context_cache_version="",       # Cache version for invalidation
 )
 ```
 
@@ -313,10 +465,12 @@ LLM(
 ## Methods Reference
 
 ### Core
-- `prompt(prompt, system=None, retry=False)` - Generate response
-- `prompt_stream(prompt)` - Stream response chunks
+- `prompt(prompt, system=None, retry=False, cached_content=None, cache_static_context=False)` - Generate response
+- `prompt_stream(prompt, cached_content=None, cache_static_context=False)` - Stream response chunks
 - `reset()` - Clear conversation history
 - `embed(text, return_full_response=False)` - Generate embeddings
+- `count_tokens(text)` - Count tokens (native Gemini only)
+- `upload_file(path, mime_type=None)` - Upload file (native Gemini only)
 
 ### Tools
 - `add_tool(ToolFunction)` - Add tool
@@ -330,6 +484,11 @@ LLM(
 - `get_last_recursion_depth()` - Max recursion depth
 - `get_last_raw_response()` - Raw response (includes thinking tags)
 
+### Context Cache
+- `create_context_cache(system=None, contents=None, tools=None, ...)` - Create cache
+- `delete_context_cache(name=None)` - Delete cache
+- `context_cache_ref` - Property: active cache reference
+
 ### WAF
 - `get_waf_metrics()` - Sanitization statistics
 - `reset_waf_metrics()` - Reset metrics
@@ -339,6 +498,7 @@ LLM(
 ```python
 from floship_llm import ToolFunction, ToolParameter, ToolCall, ToolResult
 from floship_llm import Labels, Suggestion, SuggestionsResponse, ThinkingModel
+from floship_llm import GoogleCacheManager, ContextCacheRef
 ```
 
 ## JSON Utilities

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "floship-llm"
-version = "0.7.5"
+version = "1.4.0"
 description = "A reusable LLM client library for interacting with OpenAI-compatible inference endpoints"
 readme = "README.md"
 authors = [
@@ -21,6 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 requires-python = ">=3.8.1"
 dependencies = [
@@ -31,6 +32,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+google = ["google-genai>=1.0.0; python_version >= '3.9'"]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",

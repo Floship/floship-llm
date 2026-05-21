@@ -7,6 +7,122 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-05-21
+
+### Changed
+- **Python version requirement lowered to `>=3.8.1`:** Base package (Heroku/OpenAI-compatible backends) now supports Python 3.8.1+. The `[google]` optional extra (`google-genai`) still requires Python >=3.9.
+
+### Added
+- **Google context caching (OpenAI-compatible path):** `GoogleCacheManager` uses the native `google-genai` SDK for cache lifecycle (create/get/update/delete) while keeping chat requests on the OpenAI-compatible endpoint via `extra_body.cached_content`.
+- **`ContextCacheRef` data class:** Lightweight cache reference with `name`, `key`, `model`, `expires_at`, `token_count`, and `is_valid()` method (60s refresh margin).
+- **`LLM(enable_context_cache=True)` auto-caching:** Automatically creates and reuses context caches for static content (system prompt, tools, documents). Controlled via `FLOSHIP_LLM_CONTEXT_CACHE` env var or kwarg.
+- **Manual cache API:** `llm.create_context_cache(system=..., contents=..., tools=...)` and `llm.delete_context_cache(name=...)` for explicit cache management.
+- **`prompt(cached_content="cachedContents/...")` kwarg:** Manually specify a pre-created cache ref for a request.
+- **`prompt(cache_static_context=True)` kwarg:** Trigger auto-cache creation for a single request.
+- **Break-even cost calculator:** `GoogleCacheManager.should_cache(token_count, expected_reuse, ttl_hours)` using Gemini Flash 3.5 pricing model.
+- **Deterministic cache keys:** SHA-256 of model + system + contents + tools + version + permission_hash ensures cache reuse across requests with identical static context.
+- **Config kwargs:** `context_cache_ttl_seconds`, `context_cache_min_tokens`, `context_cache_version`, `context_cache_scope`, `context_cache_expected_reuse`, `context_cache_contents`.
+- **`prompt_stream()` cache support:** Same `cached_content` and `cache_static_context` kwargs.
+- **48 new tests** covering ContextCacheRef validity, key stability, cache CRUD, LLM integration, config forwarding, cached request flow (extra_body injection, system message stripping, tool deduplication), and break-even logic.
+
+## [1.3.0] - 2026-05-21
+
+### Added
+- **Vertex AI support:** `LLM(inference_url="https://us-central1-aiplatform.googleapis.com/", ...)` auto-detects Vertex AI and uses the native `google-genai` SDK with `vertexai=True`. No explicit API key required -- uses Application Default Credentials (ADC).
+- **`google_project` / `google_location` params:** Passed to `genai.Client(vertexai=True, project=..., location=...)` via kwargs or `GOOGLE_PROJECT` / `GOOGLE_LOCATION` env vars.
+- **Auto-enable native backend for Vertex:** Vertex AI URLs (`aiplatform.googleapis.com`) automatically activate `NativeGeminiBackend` without needing `native_google=True`.
+- **40 new tests** covering Vertex AI provider detection, backend creation, LLM integration, ADC auth, feature forwarding (cache, grounding, safety, code execution, file upload, token counting), and non-Vertex API key enforcement.
+
+### Changed
+- `_detect_provider()` now returns `"vertex"` for `aiplatform.googleapis.com` URLs.
+- `_validate_environment()` skips `INFERENCE_KEY` check for Vertex AI URLs (ADC auth).
+- `NativeGeminiBackend.__init__` accepts `vertex`, `project`, `location` keyword arguments.
+- `_create_backend()` forwards `vertex`, `project`, `location` to the native Gemini backend.
+- API key validation relaxed: `api_key` parameter is optional (`str | None`) on `NativeGeminiBackend`.
+
+## [1.2.0] - 2026-05-21
+
+### Added
+- **Pre-flight token counting:** `llm.count_tokens("text")` or `llm.count_tokens(messages=[...])`. Uses native Gemini `countTokens` API when available, falls back to character-based estimate (~4 chars/token) for non-native backends.
+- **File upload:** `llm.upload_file("/path/to/video.mp4", mime_type="video/mp4")` via native Gemini `media.upload` API. Returns a file reference usable in prompt content. Raises `NotImplementedError` for non-native backends.
+- **Google Search grounding:** `LLM(grounding=True)` adds the `google_search` tool to all requests. Responses may include grounding metadata and source URLs.
+- **Safety settings:** `LLM(safety_settings={"HARM_CATEGORY_HARASSMENT": "BLOCK_ONLY_HIGH"})` forwards fine-grained safety thresholds to the Gemini `SafetySetting` config.
+- **Code execution:** `LLM(code_execution=True)` enables the Gemini code execution sandbox. The model can run Python code internally and return results.
+- **`supports_file_upload` property** on `ProviderBackend` (default `False`, `True` for native Gemini).
+- **30 new tests** covering token counting (native + fallback), file upload, grounding, safety settings, code execution, and combined feature scenarios.
+
+### Changed
+- `NativeGeminiBackend.__init__` accepts `safety_settings`, `grounding`, and `code_execution` keyword arguments.
+- `_create_backend()` forwards Phase 5 parameters to the native Gemini backend.
+- `_build_generate_config()` appends `google_search`, `code_execution`, and `safety_settings` to the config when enabled.
+
+## [1.1.0] - 2026-05-21
+
+### Added
+- **Context caching:** `LLM(cache=True, cache_ttl=3600)` enables Gemini context caching for system prompts and tool definitions. Reduces input token costs on subsequent calls.
+- **`CacheInfo` dataclass:** `llm.cache_info` returns cache status, token count, TTL remaining, and cache name.
+- **`LLM.clear_cache()`:** Explicitly invalidate the active context cache.
+- **Cache env vars:** `GEMINI_CACHE=true` and `GEMINI_CACHE_TTL=3600` for configuration without code changes.
+- **Cache lifecycle management:** Automatic hash-based invalidation when system prompt or tools change. TTL-based expiry with automatic recreation.
+- **36 new tests** covering cache init, creation, reuse, invalidation, TTL expiry, error handling, `CacheInfo`, and LLM integration.
+
+### Changed
+- `NativeGeminiBackend.__init__` accepts `cache` and `cache_ttl` keyword arguments.
+- `_create_backend()` forwards cache parameters to the native Gemini backend.
+- `chat()` now checks for cacheable content and uses `cached_content` reference in `GenerateContentConfig` when applicable.
+- `OpenAICompatibleBackend` has `get_cache_info()` and `clear_cache()` stubs (no-ops).
+
+## [1.0.0] - 2026-05-21
+
+### Added
+- **Native Gemini backend:** `NativeGeminiBackend` using the `google-genai` SDK. Opt-in via `LLM(native_google=True)` or `GEMINI_NATIVE=true` env var.
+- **Optional `google-genai` dependency:** `pip install floship-llm[google]`. Core library has zero new required dependencies.
+- **Native token counting:** `backend.count_tokens(messages)` via Gemini `countTokens` API.
+- **Message format conversion:** Automatic OpenAI messages to Gemini `Content` objects (system -> `system_instruction`, tool results -> `function_response`, multimodal support).
+- **Tool schema conversion:** OpenAI tool schemas auto-converted to Gemini `FunctionDeclaration` format.
+- **Response normalization:** Gemini responses wrapped in OpenAI-shaped objects so the LLM orchestrator works unchanged.
+- **Streaming support:** Native Gemini streaming via `generate_content_stream`, yielding OpenAI-shaped chunks.
+- **40 new tests** covering backend init, message conversion, chat, streaming, embedding, token counting, config building, and LLM integration.
+
+### Changed
+- **`requires-python` bumped to `>=3.10`** (from `>=3.8.1`) due to `google-genai` dependency.
+- `_create_backend()` factory now supports `native_google=True` path alongside existing `OpenAICompatibleBackend`.
+- Model resolution moved earlier in `LLM.__init__` so the backend has access to `self.model` at creation time.
+- When `native_google=True`, `self.client` is `None` (no OpenAI client created).
+
+## [0.9.0] - 2026-05-21
+
+### Added
+- **Provider backend abstraction layer:** Introduced `ProviderBackend` ABC and `OpenAICompatibleBackend` in `floship_llm/backends/`. All API calls now route through `self.backend.chat()` / `self.backend.embed()` instead of direct `self.client.chat.completions.create()` calls.
+- **Backend factory:** `LLM._create_backend()` creates the appropriate backend based on detected provider. Currently all providers use `OpenAICompatibleBackend`; `NativeGeminiBackend` will be added in Phase 3.
+- **Backend properties:** `provider_name`, `supports_caching`, `supports_native_tools`, `count_tokens()` available on backend instances for future provider-specific logic.
+- **20 new tests** for backend ABC, OpenAICompatibleBackend, and LLM-backend integration.
+
+### Changed
+- All 12 `self.client.chat.completions.create` and `self.client.embeddings.create` call sites in `client.py` now delegate through the backend layer. Public `LLM` API is unchanged.
+- `self.client` backward-compatibility alias preserved; existing code and tests continue to work.
+
+## [0.8.0] - 2026-05-21
+
+### Changed
+- Simplified provider switching via `INFERENCE_URL`. Heroku Inference and Google AI OpenAI-compatible endpoints share the same public `LLM` API.
+- Provider-specific request params normalized internally: Claude `extended_thinking` and `top_k` sent only to Heroku; Google AI receives standard OpenAI-compatible params.
+- Renamed provider value `"other"` to `"openai_compatible"` for clarity.
+- Google AI embedding requests now drop unsupported Heroku-specific params (`input_type`, `embedding_type`).
+- WAF sanitization gated through `_should_sanitize_for_waf()` method for cleaner provider checks.
+
+### Added
+- **URL normalization:** Google AI URLs without `/openai/` suffix are auto-normalized to the correct OpenAI-compatible endpoint.
+- **`GEMINI_API_KEY` fallback:** API key resolution now checks `GEMINI_API_KEY` env var when `INFERENCE_KEY` is not set.
+- **Google model 404 diagnostics:** Enhanced error logging when Google AI returns 404 (model not found), with actionable guidance.
+- **`_should_sanitize_for_waf()` method:** Formal WAF gating that checks both config and provider.
+- **`_normalize_base_url()` method:** Static URL normalization for provider-specific path requirements.
+- **README Provider Switching section:** Documents Heroku and Google AI setup with feature comparison table.
+
+### Notes
+- CloudFront WAF sanitization enabled by default for Heroku, disabled for Google AI and other providers.
+- Native Gemini backend (context caching, file upload) planned for 1.0.x.
+
 ## [0.7.5] - 2026-05-21
 
 ### Added

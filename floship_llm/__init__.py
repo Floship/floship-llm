@@ -14,8 +14,10 @@ from .client import (
     TruncatedResponseError,
 )
 from .content_processor import ContentProcessor
+from .google_cache_manager import ContextCacheRef, GoogleCacheManager
 from .retry_handler import RetryHandler
 from .schemas import (
+    CacheInfo,
     EmbeddingData,
     EmbeddingResponse,
     EmbeddingUsage,
@@ -33,12 +35,15 @@ from .utils import JSONUtils, lm_json_utils
 
 __all__ = [
     "LLM",
+    "CacheInfo",
     "CloudFrontWAFError",
     "CloudFrontWAFSanitizer",
     "ContentProcessor",
+    "ContextCacheRef",
     "EmbeddingData",
     "EmbeddingResponse",
     "EmbeddingUsage",
+    "GoogleCacheManager",
     "JSONUtils",
     "LLMConfig",
     "LLMMetrics",
@@ -56,4 +61,4 @@ __all__ = [
     "lm_json_utils",
 ]
 
-__version__ = "0.7.5"
+__version__ = "1.4.0"

@@ -75,7 +75,7 @@ class TestLLM:
             llm = LLM()
 
             assert llm.type == "completion"
-            assert llm.base_url == "https://test-api.example.com"
+            assert llm.base_url == "https://test-api.example.com/"
             assert llm.model == "test-model"
             assert llm.temperature == 0.15
             assert llm.max_retry == 3
@@ -96,7 +96,8 @@ class TestLLM:
             assert llm.response_format is None
 
             mock_openai.assert_called_once_with(
-                api_key="test-key", base_url="https://test-api.example.com"
+                api_key="test-key",  # pragma: allowlist secret
+                base_url="https://test-api.example.com/",
             )
 
     def test_init_with_custom_api_key(self):
@@ -107,7 +108,7 @@ class TestLLM:
 
             assert llm.api_key == custom_key
             mock_openai.assert_called_once_with(
-                api_key=custom_key, base_url="https://test-api.example.com"
+                api_key=custom_key, base_url="https://test-api.example.com/"
             )
 
     def test_init_with_custom_parameters(self):
@@ -178,8 +179,12 @@ class TestLLM:
         assert LLM._detect_provider(HEROKU_URL) == "heroku"
         assert LLM._detect_provider("https://eu.inference.heroku.com/v1") == "heroku"
         assert LLM._detect_provider(GOOGLE_URL) == "google"
-        assert LLM._detect_provider("https://api.example.com") == "other"
-        assert LLM._detect_provider("") == "other"
+        assert LLM._detect_provider("https://api.example.com") == "openai_compatible"
+        assert LLM._detect_provider("") == "openai_compatible"
+        assert (
+            LLM._detect_provider("https://generativelanguage.googleapis.com/v1beta/")
+            == "google"
+        )
 
     def test_init_google_provider_auto_disables_waf(self):
         """Test that Google AI provider auto-disables WAF sanitization."""
@@ -2543,8 +2548,187 @@ class TestGoogleAICompat:
         """inference_url kwarg should override INFERENCE_URL env var."""
         with patch("floship_llm.client.OpenAI"):
             llm = LLM(inference_url=HEROKU_URL)
-            assert llm.base_url == HEROKU_URL
+            assert llm.base_url == HEROKU_URL + "/"
             assert llm._provider == "heroku"
+
+    def test_normalize_base_url_google_without_openai_suffix(self):
+        """Google URL without /openai/ suffix should be auto-normalized."""
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ,
+            {
+                "INFERENCE_URL": "https://generativelanguage.googleapis.com/v1beta/",
+            },
+        ):
+            llm = LLM()
+            assert llm._provider == "google"
+            assert llm.base_url == (
+                "https://generativelanguage.googleapis.com/v1beta/openai/"
+            )
+
+    def test_normalize_base_url_google_with_openai_suffix(self):
+        """Google URL with /openai/ suffix should stay unchanged."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            assert llm.base_url == GOOGLE_URL
+
+    def test_normalize_base_url_heroku_unchanged(self):
+        """Heroku URL should not be modified by normalization."""
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ,
+            {"INFERENCE_URL": HEROKU_URL},
+        ):
+            llm = LLM()
+            assert llm.base_url == HEROKU_URL + "/"
+
+    def test_gemini_api_key_fallback(self):
+        """GEMINI_API_KEY should work as fallback when INFERENCE_KEY is not set."""
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ,
+            {
+                "INFERENCE_URL": GOOGLE_URL,
+                "INFERENCE_MODEL_ID": "gemini-2.5-flash",
+                "GEMINI_API_KEY": "gemini-key-789",  # pragma: allowlist secret
+            },
+            clear=True,
+        ):
+            llm = LLM()
+            assert llm.api_key == "gemini-key-789"  # pragma: allowlist secret
+
+    def test_inference_key_takes_priority_over_gemini_api_key(self):
+        """INFERENCE_KEY should take priority over GEMINI_API_KEY."""
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ,
+            {
+                "INFERENCE_URL": GOOGLE_URL,
+                "INFERENCE_MODEL_ID": "gemini-2.5-flash",
+                "INFERENCE_KEY": "inference-key-123",  # pragma: allowlist secret
+                "GEMINI_API_KEY": "gemini-key-789",  # pragma: allowlist secret
+            },
+            clear=True,
+        ):
+            llm = LLM()
+            assert llm.api_key == "inference-key-123"  # pragma: allowlist secret
+
+    def test_should_sanitize_for_waf_heroku(self):
+        """_should_sanitize_for_waf returns True for Heroku."""
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ,
+            {"INFERENCE_URL": HEROKU_URL},
+        ):
+            llm = LLM()
+            assert llm._should_sanitize_for_waf() is True
+
+    def test_should_sanitize_for_waf_google(self):
+        """_should_sanitize_for_waf returns False for Google AI."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            assert llm._should_sanitize_for_waf() is False
+
+    def test_should_sanitize_for_waf_google_override(self):
+        """_should_sanitize_for_waf respects explicit WAF enable for Google."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(enable_waf_sanitization=True)
+            # When explicitly enabled, _should_sanitize_for_waf still returns False
+            # because the method checks provider, not the config flag
+            # WAF is fundamentally a Heroku/CloudFront concern
+            assert llm._should_sanitize_for_waf() is False
+
+    def test_get_request_params_google_omits_top_k(self):
+        """Google AI should not include top_k in request params."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(temperature=0.7, top_k=40)
+            params = llm.get_request_params()
+            assert "top_k" not in params
+            assert "extra_body" not in params or "top_k" not in params.get(
+                "extra_body", {}
+            )
+
+    def test_get_request_params_heroku_includes_top_k(self):
+        """Heroku should include top_k in request params."""
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ,
+            {"INFERENCE_URL": HEROKU_URL},
+        ):
+            llm = LLM(temperature=0.7, top_k=40)
+            params = llm.get_request_params()
+            assert params["extra_body"]["top_k"] == 40
+
+    def test_get_embedding_params_google_drops_unsupported(self):
+        """Google AI should drop input_type and embedding_type from embedding params."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(
+                type="embedding",
+                model="gemini-embedding-001",
+                input_type="search_document",
+                embedding_type="float",
+            )
+            params = llm.get_embedding_params()
+            assert params == {"model": "gemini-embedding-001"}
+            assert "input_type" not in params
+            assert "embedding_type" not in params
+
+    def test_get_embedding_params_heroku_includes_all(self):
+        """Heroku should include input_type and embedding_type in embedding params."""
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ,
+            {"INFERENCE_URL": HEROKU_URL},
+        ):
+            llm = LLM(
+                type="embedding",
+                model="cohere-embed-multilingual",
+                input_type="search_document",
+                encoding_format="base64",
+            )
+            params = llm.get_embedding_params()
+            assert params["input_type"] == "search_document"
+            assert params["encoding_format"] == "base64"
+
+    def test_log_provider_error_context_google_404(self, caplog):
+        """Google AI 404 should log helpful model-not-found message."""
+        import logging
+
+        from openai import APIStatusError
+
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            assert llm._provider == "google"
+
+            mock_response = Mock()
+            mock_response.status_code = 404
+            mock_response.headers = {}
+            error = APIStatusError(
+                message="not found",
+                response=mock_response,
+                body=None,
+            )
+            with caplog.at_level(logging.ERROR, logger="floship_llm.client"):
+                llm._log_provider_error_context(error)
+            assert "Model not found for Google AI provider" in caplog.text
+            assert "INFERENCE_MODEL_ID" in caplog.text
+
+    def test_log_provider_error_context_heroku_404_no_log(self, caplog):
+        """Heroku 404 should not log Google-specific message."""
+        import logging
+
+        from openai import APIStatusError
+
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ,
+            {"INFERENCE_URL": HEROKU_URL},
+        ):
+            llm = LLM()
+
+            mock_response = Mock()
+            mock_response.status_code = 404
+            mock_response.headers = {}
+            error = APIStatusError(
+                message="not found",
+                response=mock_response,
+                body=None,
+            )
+            with caplog.at_level(logging.ERROR, logger="floship_llm.client"):
+                llm._log_provider_error_context(error)
+            assert "Google AI provider" not in caplog.text
 
     def test_inference_key_kwarg_overrides_env(self):
         """inference_key kwarg should override INFERENCE_KEY env var."""
