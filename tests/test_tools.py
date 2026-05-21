@@ -969,8 +969,8 @@ class TestLLMTools:
             assert len(validated) == 1
             assert validated[0]["role"] == "assistant"
             assert "tool_calls" in validated[0]
-            # Assistant with tool_calls uses period placeholder (API requires non-empty content)
-            assert validated[0]["content"] == "."
+            # Assistant with tool_calls uses dynamic placeholder from tool names
+            assert validated[0]["content"] == "[Calling test]"
 
     def test_validate_messages_edge_logging(self):
         """Test edge case logging paths for full coverage."""

@@ -3952,6 +3952,28 @@ class LLM:
 
             # For tool_call messages, preserve content if exists, otherwise use placeholder
             if is_tool_call_message:
+                # Sanitize tool call names and arguments FIRST so placeholder
+                # uses clean names and callers see sanitized tool_calls.
+                tool_calls = validated_msg.get("tool_calls")
+                if isinstance(tool_calls, list):
+                    validated_msg["tool_calls"] = self._sanitize_tool_calls(
+                        tool_calls, i
+                    )
+                    # Persist back to original message so concatenated args
+                    # are not re-split on subsequent rounds.
+                    msg["tool_calls"] = validated_msg["tool_calls"]
+
+                # Build a dynamic placeholder from sanitized tool call names
+                # instead of static "." which Gemini can mimic in responses.
+                tc_list = validated_msg.get("tool_calls") or []
+                try:
+                    names = [
+                        tc["function"]["name"] for tc in tc_list if isinstance(tc, dict)
+                    ]
+                    placeholder = f"[Calling {', '.join(names)}]" if names else "."
+                except (KeyError, TypeError):
+                    placeholder = "."
+
                 existing_content = validated_msg.get("content")
                 if existing_content and str(existing_content).strip():
                     # Preserve the LLM's response text (e.g., "I'll help you with that")
@@ -3962,20 +3984,12 @@ class LLM:
                         str(existing_content),
                         flags=re.DOTALL,
                     ).strip()
-                    validated_msg["content"] = clean_content if clean_content else "."
-                else:
-                    # No content - use minimal placeholder (some APIs require non-empty content)
-                    # Using period as it's more universally accepted than space
-                    validated_msg["content"] = "."
-                # Sanitize tool call names and arguments
-                tool_calls = validated_msg.get("tool_calls")
-                if isinstance(tool_calls, list):
-                    validated_msg["tool_calls"] = self._sanitize_tool_calls(
-                        tool_calls, i
+                    validated_msg["content"] = (
+                        clean_content if clean_content else placeholder
                     )
-                    # Persist back to original message so concatenated args
-                    # are not re-split on subsequent rounds.
-                    msg["tool_calls"] = validated_msg["tool_calls"]
+                else:
+                    # No content - use dynamic placeholder (some APIs require non-empty content)
+                    validated_msg["content"] = placeholder
                 # Gemini 3+: inject dummy thought_signature if missing.
                 # Google AI requires thought_signature on the first functionCall
                 # in each step of the current turn. If callers (e.g. streaming
@@ -4256,7 +4270,7 @@ class LLM:
 
         return sanitized_tool_calls
 
-    def _try_split_concatenated_json(self, raw: str) -> Optional[List[dict]]:
+    def try_split_concatenated_json(self, raw: str) -> Optional[List[dict]]:
         """
         Try to split concatenated JSON objects like '{}{}' into a list.
         Returns list of parsed dicts if successful, None otherwise.
@@ -4285,6 +4299,9 @@ class LLM:
             return None
 
         return objects if len(objects) > 1 else None
+
+    # Backward-compat alias for the old private name
+    _try_split_concatenated_json = try_split_concatenated_json
 
     # ========== Tool Management (Delegated) ==========
 

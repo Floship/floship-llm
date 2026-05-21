@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2026-05-21
+
+### Changed
+- **Dynamic tool-call placeholder:** Assistant messages with tool_calls now use `[Calling tool_name]` instead of `"."` to prevent Gemini from mimicking the static pattern in responses.
+
+### Added
+- **Public `try_split_concatenated_json` method:** Exposed as public API on `FloshipLLM` for callers that need execution-level JSON splitting. Old `_try_split_concatenated_json` kept as backward-compat alias.
+
 ## [1.4.0] - 2026-05-21
 
 ### Changed
