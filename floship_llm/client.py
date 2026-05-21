@@ -605,8 +605,8 @@ class LLM:
 
         # Auto-map Heroku-specific embedding models for Google AI provider
         _GOOGLE_EMBEDDING_MODEL_MAP = {
-            "cohere-embed-multilingual": "text-embedding-004",
-            "cohere-embed-english": "text-embedding-004",
+            "cohere-embed-multilingual": "gemini-embedding-001",
+            "cohere-embed-english": "gemini-embedding-001",
         }
         if (
             self.type == "embedding"
@@ -687,7 +687,7 @@ class LLM:
         self.stream = kwargs.get("stream", False)
 
         # Tool configuration
-        self.enable_tools = kwargs.get("enable_tools", False)
+        self.enable_tools = kwargs.get("enable_tools", bool(kwargs.get("tools")))
         self.tool_request_delay = float(os.environ.get("LLM_TOOL_REQUEST_DELAY", "0"))
 
         # Assistant message callback for real-time updates during tool execution
@@ -713,6 +713,12 @@ class LLM:
         # to disable extended_thinking when schema-based thinking is used
         # Use pseudo-thinking (prompt-based) when native thinking is rejected
         self._use_pseudo_thinking = False
+
+        # Register tools passed via kwargs
+        init_tools = kwargs.get("tools")
+        if init_tools:
+            for tool in init_tools:
+                self.tool_manager.add_tool(tool)
 
         # Backward compatibility - maintain tools dict reference
         self.tools = self.tool_manager.tools

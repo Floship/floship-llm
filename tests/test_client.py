@@ -2525,11 +2525,11 @@ class TestGoogleAICompat:
                 assert "extra_content" not in first_tc
 
     def test_embedding_model_auto_mapped(self):
-        """cohere-embed-multilingual should auto-map to text-embedding-004 on Google AI."""
+        """cohere-embed-multilingual should auto-map to gemini-embedding-001 on Google AI."""
         with patch("floship_llm.client.OpenAI"):
             llm = LLM(type="embedding", model="cohere-embed-multilingual")
             assert llm._provider == "google"
-            assert llm.model == "text-embedding-004"
+            assert llm.model == "gemini-embedding-001"
 
     def test_embedding_model_not_mapped_on_heroku(self):
         """cohere-embed-multilingual should stay as-is on Heroku."""
@@ -2632,10 +2632,10 @@ class TestGoogleAICompat:
             assert llm.api_key == "alias-key-456"  # pragma: allowlist secret
 
     def test_embedding_model_cohere_english_mapped(self):
-        """cohere-embed-english should also map to text-embedding-004."""
+        """cohere-embed-english should also map to gemini-embedding-001."""
         with patch("floship_llm.client.OpenAI"):
             llm = LLM(type="embedding", model="cohere-embed-english")
-            assert llm.model == "text-embedding-004"
+            assert llm.model == "gemini-embedding-001"
 
     def test_waf_auto_disabled_for_google(self):
         """Google AI provider should auto-disable WAF sanitization."""
@@ -2643,6 +2643,46 @@ class TestGoogleAICompat:
             llm = LLM()
             assert llm._provider == "google"
             assert llm.waf_config.enable_waf_sanitization is False
+
+    def test_tools_kwarg_registers_tools(self):
+        """Tools passed via kwargs should be registered in tool_manager."""
+        with patch("floship_llm.client.OpenAI"):
+            tools = [
+                ToolFunction(
+                    name="my_tool",
+                    description="A test tool",
+                    parameters=[
+                        ToolParameter(
+                            name="arg1",
+                            type="string",
+                            description="An arg",
+                            required=True,
+                        )
+                    ],
+                )
+            ]
+            llm = LLM(tools=tools)
+            assert len(llm.tool_manager.tools) == 1
+            assert "my_tool" in llm.tool_manager.tools
+
+    def test_tools_kwarg_auto_enables_tools(self):
+        """Passing tools via kwargs should auto-set enable_tools=True."""
+        with patch("floship_llm.client.OpenAI"):
+            tools = [
+                ToolFunction(
+                    name="my_tool",
+                    description="A test tool",
+                    parameters=[],
+                )
+            ]
+            llm = LLM(tools=tools)
+            assert llm.enable_tools is True
+
+    def test_no_tools_kwarg_keeps_enable_tools_false(self):
+        """Without tools kwarg, enable_tools should default to False."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            assert llm.enable_tools is False
 
     def test_waf_stays_enabled_for_heroku(self):
         """Heroku provider should keep WAF sanitization enabled by default."""

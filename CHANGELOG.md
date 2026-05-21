@@ -7,11 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-05-21
+
+### Fixed
+- **Embedding model mapping:** Changed auto-mapping target from `text-embedding-004` (deprecated) to `gemini-embedding-001` (3072 dimensions) for Google AI provider.
+- **Tools kwarg registration:** Tools passed via `tools=[...]` kwarg in constructor are now properly registered in `tool_manager`. Previously they were silently ignored.
+- **Auto-enable tools:** Passing `tools=[...]` kwarg now auto-sets `enable_tools=True` instead of requiring it explicitly.
+
 ## [0.7.0] - 2026-05-21
 
 ### Added
 - **Gemini thought_signature auto-injection:** `_validate_messages_for_api` injects dummy `skip_thought_signature_validator` on the first tool_call for Google AI provider when `extra_content` is missing, preventing Gemini 3+ 400 errors.
-- **Embedding model auto-mapping:** `cohere-embed-multilingual` and `cohere-embed-english` are auto-mapped to `text-embedding-004` when provider is Google AI, preventing 404 errors.
+- **Embedding model auto-mapping:** `cohere-embed-multilingual` and `cohere-embed-english` are auto-mapped to `gemini-embedding-001` when provider is Google AI, preventing 404 errors.
 - **Constructor kwargs:** `inference_url`, `inference_key`, and `api_key` kwargs override environment variables, allowing per-instance configuration.
 - **`model` kwarg:** `model` parameter overrides `INFERENCE_MODEL_ID` env var.
 
