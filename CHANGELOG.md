@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-05-21
+
+### Fixed
+- **Concatenated JSON splitting in tool execution:** The v0.7.2 fix only applied when messages were re-sent to the API (`_sanitize_tool_calls`). The initial tool execution path in `_handle_tool_calls` still failed on concatenated JSON, causing `json.loads()` errors and wasted tool rounds. Now splits concatenated tool calls before execution, expanding them into separate tool calls with correct names and arguments.
+
 ## [0.7.2] - 2026-05-21
 
 ### Fixed

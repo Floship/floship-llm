@@ -2795,24 +2795,71 @@ class LLM:
         start_time = time.time()
         iteration_tool_count = len(message.tool_calls)
 
+        # Build execution list: expand any concatenated JSON tool calls
+        tool_calls_to_execute = []
         for tool_call in message.tool_calls:
+            raw_args = tool_call.function.arguments
+            split_calls = self._try_split_concatenated_json(raw_args)
+            if split_calls and len(split_calls) > 1:
+                logger.info(
+                    f"Recovered {len(split_calls)} concatenated tool calls "
+                    f"from {tool_call.function.name}. "
+                    f"Args preview: {str(raw_args)[:200]!r}"
+                )
+                for split_idx, split_obj in enumerate(split_calls):
+                    if "arguments" in split_obj:
+                        split_name = split_obj.get("tool_name", tool_call.function.name)
+                        split_args = split_obj["arguments"]
+                        if isinstance(split_args, dict):
+                            split_args = json.dumps(split_args)
+                    else:
+                        split_name = tool_call.function.name
+                        split_args = json.dumps(split_obj)
+                    tc_id = (
+                        tool_call.id
+                        if split_idx == 0
+                        else f"{tool_call.id}_split_{split_idx}"
+                    )
+                    tool_calls_to_execute.append((tc_id, split_name, split_args))
+            else:
+                tool_calls_to_execute.append(
+                    (tool_call.id, tool_call.function.name, raw_args)
+                )
+
+        # Update the assistant message's tool_calls to match expanded list
+        if len(tool_calls_to_execute) > len(message.tool_calls):
+            assistant_message["tool_calls"] = [
+                {
+                    "id": tc_id,
+                    "type": "function",
+                    "function": {"name": tc_name, "arguments": tc_args},
+                }
+                for tc_id, tc_name, tc_args in tool_calls_to_execute
+            ]
+            # Update stored message
+            for idx, msg in enumerate(self.messages):
+                if msg is assistant_message:
+                    self.messages[idx] = assistant_message
+                    break
+
+        iteration_tool_count = len(tool_calls_to_execute)
+
+        for tc_id, tc_name, tc_args in tool_calls_to_execute:
             tool_start_time = time.time()
             arguments = None  # Initialize to None for error handling
 
             try:
                 # Parse and execute
-                arguments = json.loads(tool_call.function.arguments)
+                arguments = json.loads(tc_args)
 
                 # Log tool call arguments for debugging
                 args_str = json.dumps(arguments, default=str)
                 logger.info(
-                    f"🔧 TOOL CALL: {tool_call.function.name}\n"
+                    f"🔧 TOOL CALL: {tc_name}\n"
                     f"   ARGUMENTS: {args_str[:3000]}{'...[TRUNCATED]' if len(args_str) > 3000 else ''}"
                 )
 
-                tc = ToolCall(
-                    id=tool_call.id, name=tool_call.function.name, arguments=arguments
-                )
+                tc = ToolCall(id=tc_id, name=tc_name, arguments=arguments)
 
                 result = self.tool_manager.execute_tool(tc)
 
@@ -2820,7 +2867,7 @@ class LLM:
                 execution_time = time.time() - tool_start_time
                 processed = self.content_processor.process_tool_response(
                     result.content,
-                    tool_call.function.name,
+                    tc_name,
                     execution_time=execution_time,
                 )
 
@@ -2828,7 +2875,7 @@ class LLM:
                 self._current_tool_call_count += 1
                 tool_entry = {
                     "index": self._current_tool_call_count,
-                    "tool": tool_call.function.name,
+                    "tool": tc_name,
                     "arguments": arguments,
                     "recursion_depth": recursion_depth,
                     "execution_time_ms": int(execution_time * 1000),
@@ -2847,7 +2894,7 @@ class LLM:
                 # Build tool message
                 tool_message = {
                     "role": "tool",
-                    "tool_call_id": tool_call.id,
+                    "tool_call_id": tc_id,
                     "content": processed["content"],
                 }
 
@@ -2860,7 +2907,7 @@ class LLM:
                 if "metadata" in processed:
                     meta = processed["metadata"]
                     logger.info(
-                        f"Executed tool {tool_call.function.name} "
+                        f"Executed tool {tc_name} "
                         f"(#{self._current_tool_call_count}, depth={recursion_depth}): "
                         f"tokens={meta['final_tokens']}, "
                         f"time={meta.get('execution_time_ms', 0)}ms, "
@@ -2869,26 +2916,20 @@ class LLM:
                     )
                 else:
                     logger.info(
-                        f"Executed tool {tool_call.function.name} "
+                        f"Executed tool {tc_name} "
                         f"(#{self._current_tool_call_count}, depth={recursion_depth})"
                     )
 
             except Exception as e:
-                logger.error(
-                    f"Error processing tool call {tool_call.function.name}: {e!s}"
-                )
+                logger.error(f"Error processing tool call {tc_name}: {e!s}")
 
                 # Still track failed tool calls (arguments may be None if parsing failed)
                 self._current_tool_call_count += 1
                 self._current_tool_history.append(
                     {
                         "index": self._current_tool_call_count,
-                        "tool": tool_call.function.name,
-                        "arguments": (
-                            arguments
-                            if arguments is not None
-                            else tool_call.function.arguments
-                        ),
+                        "tool": tc_name,
+                        "arguments": (arguments if arguments is not None else tc_args),
                         "recursion_depth": recursion_depth,
                         "error": str(e),
                         "timestamp": time.time(),
@@ -2896,13 +2937,13 @@ class LLM:
                 )
 
                 processed = self.content_processor.process_tool_response(
-                    f"Error: {e!s}", tool_call.function.name
+                    f"Error: {e!s}", tc_name
                 )
 
                 self.messages.append(
                     {
                         "role": "tool",
-                        "tool_call_id": tool_call.id,
+                        "tool_call_id": tc_id,
                         "content": processed["content"],
                     }
                 )
