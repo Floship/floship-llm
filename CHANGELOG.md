@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-05-21
+
+### Added
+- **Multimodal (vision) support:** `prompt()` and `add_message()` now accept OpenAI-style list-of-dicts content with `text` and `image_url` parts. Works with Gemini's OpenAI-compatible endpoint for image analysis via public URL or base64 data URL. WAF sanitization applies to text parts only; image parts are preserved as-is.
+
 ## [0.7.4] - 2026-05-21
 
 ### Fixed

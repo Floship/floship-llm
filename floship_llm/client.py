@@ -828,6 +828,18 @@ class LLM:
 
         return sanitized
 
+    def _sanitize_multimodal_for_waf(self, content: list) -> list:
+        """Sanitize text parts of multimodal content for WAF."""
+        sanitized_parts = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text = part.get("text", "")
+                sanitized_text = self._sanitize_for_waf(text)
+                sanitized_parts.append({**part, "text": sanitized_text})
+            else:
+                sanitized_parts.append(part)
+        return sanitized_parts
+
     def _is_cloudfront_403(self, error: Exception) -> bool:
         """
         Check if error is a CloudFront WAF 403 error (content blocked).
@@ -1512,19 +1524,30 @@ class LLM:
 
     # ========== Message Management ==========
 
-    def add_message(self, role: str, content: str):
+    def add_message(self, role: str, content):
         """
         Add a message to conversation history.
 
         Args:
             role: Message role ('user', 'assistant', or 'system')
-            content: Message content
+            content: Message content (str or list of content parts for multimodal)
 
         Raises:
             ValueError: If role is invalid
         """
         if not isinstance(role, str) or role not in ["user", "assistant", "system"]:
             raise ValueError("Role must be 'user', 'assistant', or 'system'")
+
+        # Multimodal content (list of parts) -- skip string-only operations
+        if isinstance(content, list):
+            # Check for duplicates
+            if role in ["system", "user"]:
+                for msg in self.messages:
+                    if msg["role"] == role and msg["content"] == content:
+                        logger.warning(f"Duplicate {role} message detected. Ignoring.")
+                        return
+            self.messages.append({"role": role, "content": content})
+            return
 
         content = self._sanitize_messages(content)
 
@@ -1989,7 +2012,7 @@ class LLM:
 
     def prompt(
         self,
-        prompt: Optional[str] = None,
+        prompt=None,
         system: Optional[str] = None,
         retry: bool = False,
         stream_final_response: bool = False,
@@ -2066,9 +2089,12 @@ class LLM:
         if prompt and not retry:
             self.retry_count = 0
 
-            # Apply WAF sanitization
+            # Apply WAF sanitization (only to string content)
             if self.waf_config.enable_waf_sanitization:
-                prompt = self._sanitize_for_waf(prompt)
+                if isinstance(prompt, str):
+                    prompt = self._sanitize_for_waf(prompt)
+                elif isinstance(prompt, list):
+                    prompt = self._sanitize_multimodal_for_waf(prompt)
                 if system:
                     system = self._sanitize_for_waf(system)
 
@@ -3534,6 +3560,16 @@ class LLM:
                 validated_msg["content"] = "Message content unavailable"
             elif validated_msg["content"] is None:
                 validated_msg["content"] = "Message content unavailable"
+
+            # Multimodal content (list of parts) -- preserve as-is
+            if isinstance(validated_msg["content"], list):
+                # WAF-sanitize text parts only
+                if self.waf_config.enable_waf_sanitization:
+                    validated_msg["content"] = self._sanitize_multimodal_for_waf(
+                        validated_msg["content"]
+                    )
+                validated_messages.append(validated_msg)
+                continue
 
             # Convert to string
             try:
