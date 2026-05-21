@@ -2807,14 +2807,11 @@ class LLM:
                     f"Args preview: {str(raw_args)[:200]!r}"
                 )
                 for split_idx, split_obj in enumerate(split_calls):
-                    if "arguments" in split_obj:
-                        split_name = split_obj.get("tool_name", tool_call.function.name)
-                        split_args = split_obj["arguments"]
-                        if isinstance(split_args, dict):
-                            split_args = json.dumps(split_args)
-                    else:
-                        split_name = tool_call.function.name
-                        split_args = json.dumps(split_obj)
+                    # Keep the original function name (e.g. execute_tool) so
+                    # the tool manager can find and dispatch it.  Serialize
+                    # the full split object as arguments.
+                    split_name = tool_call.function.name
+                    split_args = json.dumps(split_obj)
                     tc_id = (
                         tool_call.id
                         if split_idx == 0

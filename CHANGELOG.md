@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-05-21
+
+### Fixed
+- **Keep original function name in split tool calls:** The concatenated JSON splitter in `_handle_tool_calls` was extracting `tool_name` from Gemini's payload (e.g. `get_order`) as the function name, but the tool manager only knows the wrapper name (e.g. `execute_tool`). Now always preserves the original function name and serializes the full split object as arguments.
+
 ## [0.7.3] - 2026-05-21
 
 ### Fixed
