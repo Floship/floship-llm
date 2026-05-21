@@ -67,17 +67,26 @@ def _make_response(
     content: str | None,
     tool_calls: list[SimpleNamespace] | None = None,
 ) -> SimpleNamespace:
+    finish_reason = "tool_calls" if tool_calls else "stop"
     return SimpleNamespace(
-        choices=[SimpleNamespace(message=_make_message(content, tool_calls))]
+        choices=[
+            SimpleNamespace(
+                message=_make_message(content, tool_calls),
+                finish_reason=finish_reason,
+            )
+        ]
     )
 
 
 def _make_stream_chunk(
     content: str | None = None,
     tool_calls: list[SimpleNamespace] | None = None,
+    finish_reason: str | None = None,
 ) -> SimpleNamespace:
     delta = SimpleNamespace(content=content, tool_calls=tool_calls or None)
-    return SimpleNamespace(choices=[SimpleNamespace(delta=delta)])
+    return SimpleNamespace(
+        choices=[SimpleNamespace(delta=delta, finish_reason=finish_reason)]
+    )
 
 
 def _make_embed_item(index: int, embedding: list[float]) -> SimpleNamespace:
@@ -616,6 +625,8 @@ class NativeGeminiBackend(ProviderBackend):
         self, model: str, contents: list[Any], config: Any
     ) -> Iterator[SimpleNamespace]:
         """Yield OpenAI-shaped stream chunks from a Gemini streaming response."""
+        tool_call_counter = 0
+        had_tool_calls = False
         for chunk in self._client.models.generate_content_stream(
             model=model,
             contents=contents,
@@ -636,4 +647,11 @@ class NativeGeminiBackend(ProviderBackend):
                         name=fc.name,
                         arguments=json.dumps(dict(fc.args)) if fc.args else "{}",
                     )
+                    tc.index = tool_call_counter
+                    tool_call_counter += 1
+                    had_tool_calls = True
                     yield _make_stream_chunk(tool_calls=[tc])
+        # Emit final sentinel chunk with finish_reason
+        yield _make_stream_chunk(
+            finish_reason="tool_calls" if had_tool_calls else "stop"
+        )

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.2] - 2026-05-21
+
+### Fixed
+- **Native Gemini streaming compatibility:** Stream chunks now include `finish_reason` on `choices[0]`, tool call deltas include `.index`, and a final sentinel chunk is emitted with `finish_reason="stop"` or `"tool_calls"`.
+- **Non-streaming `finish_reason`:** `_make_response` now sets `finish_reason` on `choices[0]` (`"stop"` for text, `"tool_calls"` for tool calls).
+
 ## [1.4.1] - 2026-05-21
 
 ### Changed

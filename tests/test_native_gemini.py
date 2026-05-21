@@ -173,12 +173,28 @@ class TestResponseWrappers:
         chunk = _make_stream_chunk(content="Hi")
         assert chunk.choices[0].delta.content == "Hi"
         assert chunk.choices[0].delta.tool_calls is None
+        assert chunk.choices[0].finish_reason is None
 
     def test_make_stream_chunk_tool_call(self):
         tc = _make_tool_call("call_1", "fn", "{}")
         chunk = _make_stream_chunk(tool_calls=[tc])
         assert chunk.choices[0].delta.content is None
         assert len(chunk.choices[0].delta.tool_calls) == 1
+        assert chunk.choices[0].finish_reason is None
+
+    def test_make_stream_chunk_finish_reason(self):
+        chunk = _make_stream_chunk(finish_reason="stop")
+        assert chunk.choices[0].finish_reason == "stop"
+        assert chunk.choices[0].delta.content is None
+
+    def test_make_response_finish_reason_stop(self):
+        resp = _make_response(content="Hello")
+        assert resp.choices[0].finish_reason == "stop"
+
+    def test_make_response_finish_reason_tool_calls(self):
+        tc = _make_tool_call("call_1", "fn", "{}")
+        resp = _make_response(content=None, tool_calls=[tc])
+        assert resp.choices[0].finish_reason == "tool_calls"
 
     def test_make_embed_response(self):
         resp = _make_embed_response([[0.1, 0.2], [0.3, 0.4]], "gemini-embedding-001")
@@ -395,6 +411,24 @@ class TestChatStreaming:
 
             assert "".join(collected) == "Hello world!"
 
+    def test_stream_final_chunk_finish_reason_stop(self):
+        """Text-only stream ends with finish_reason='stop'."""
+        with patch("floship_llm.backends.native_gemini._require_genai") as mock_req:
+            mock_genai = Mock()
+            mock_types = Mock()
+            mock_req.return_value = (mock_genai, mock_types)
+            backend = NativeGeminiBackend(api_key="k", model="m")
+
+            mock_chunks = _mock_gemini_stream_chunks(["Hi"])
+            mock_genai.Client.return_value.models.generate_content_stream.return_value = iter(
+                mock_chunks
+            )
+
+            result = list(backend.chat(model="m", messages=[], stream=True))
+
+            # Last chunk is the sentinel with finish_reason
+            assert result[-1].choices[0].finish_reason == "stop"
+
     def test_stream_with_tool_call(self):
         with patch("floship_llm.backends.native_gemini._require_genai") as mock_req:
             mock_genai = Mock()
@@ -422,10 +456,52 @@ class TestChatStreaming:
 
             result = list(backend.chat(model="m", messages=[], stream=True))
 
-            assert len(result) == 1
-            assert result[0].choices[0].delta.tool_calls is not None
-            assert len(result[0].choices[0].delta.tool_calls) == 1
-            assert result[0].choices[0].delta.tool_calls[0].function.name == "search"
+            # First chunk has the tool call, last chunk is sentinel
+            tc_chunk = result[0]
+            assert tc_chunk.choices[0].delta.tool_calls is not None
+            assert len(tc_chunk.choices[0].delta.tool_calls) == 1
+            assert tc_chunk.choices[0].delta.tool_calls[0].function.name == "search"
+            assert tc_chunk.choices[0].delta.tool_calls[0].index == 0
+            # Sentinel has finish_reason="tool_calls"
+            assert result[-1].choices[0].finish_reason == "tool_calls"
+
+    def test_stream_tool_call_index_increments(self):
+        """Multiple tool call parts get incrementing index values."""
+        with patch("floship_llm.backends.native_gemini._require_genai") as mock_req:
+            mock_genai = Mock()
+            mock_types = Mock()
+            mock_req.return_value = (mock_genai, mock_types)
+            backend = NativeGeminiBackend(api_key="k", model="m")
+
+            # Two function_call parts in one chunk
+            parts = []
+            for name in ["search", "fetch"]:
+                part = Mock()
+                part.text = None
+                fc = Mock()
+                fc.name = name
+                fc.args = {}
+                part.function_call = fc
+                parts.append(part)
+
+            content = Mock()
+            content.parts = parts
+            candidate = Mock()
+            candidate.content = content
+            chunk = Mock()
+            chunk.candidates = [candidate]
+
+            mock_genai.Client.return_value.models.generate_content_stream.return_value = iter(
+                [chunk]
+            )
+
+            result = list(backend.chat(model="m", messages=[], stream=True))
+
+            # Two tool call chunks + sentinel
+            tc_chunks = [c for c in result if c.choices[0].delta.tool_calls]
+            assert len(tc_chunks) == 2
+            assert tc_chunks[0].choices[0].delta.tool_calls[0].index == 0
+            assert tc_chunks[1].choices[0].delta.tool_calls[0].index == 1
 
     def test_stream_skips_empty_candidates(self):
         with patch("floship_llm.backends.native_gemini._require_genai") as mock_req:
@@ -443,8 +519,10 @@ class TestChatStreaming:
             )
 
             result = list(backend.chat(model="m", messages=[], stream=True))
-            assert len(result) == 1
+            # 1 data chunk + 1 sentinel
+            assert len(result) == 2
             assert result[0].choices[0].delta.content == "data"
+            assert result[-1].choices[0].finish_reason == "stop"
 
 
 class TestEmbed:

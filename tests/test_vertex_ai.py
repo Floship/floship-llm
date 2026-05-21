@@ -442,8 +442,10 @@ class TestVertexFeatures:
             stream=True,
         )
         chunks = list(result)
-        assert len(chunks) == 1
+        # 1 data chunk + 1 sentinel with finish_reason
+        assert len(chunks) == 2
         assert chunks[0].choices[0].delta.content == "streamed"
+        assert chunks[-1].choices[0].finish_reason == "stop"
 
     def test_vertex_with_safety_settings(self):
         backend, _, _ = _make_vertex_backend(
