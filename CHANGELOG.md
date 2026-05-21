@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.3] - 2025-07-22
+
+### Fixed
+- **thought_signature SDK bug workaround:** Strip `thought_signature` from the tool-call round-trip instead of replaying it, working around a `google-genai==1.20.0` bug where even unmodified response objects fail validation.
+- **Grounding + function tools conflict:** When built-in tools (grounding, code_execution) coexist with function tools, automatically set `tool_config.include_server_side_tool_invocations = True` to prevent `400 INVALID_ARGUMENT`.
+- **Context cache creation errors:** Wrap cache creation in try/except so `ValidationError` (tools in cached content) and `400 Cached content is too small` fall back gracefully to non-cached requests instead of crashing.
+
 ## [1.4.2] - 2026-05-21
 
 ### Fixed

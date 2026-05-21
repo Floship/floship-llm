@@ -456,6 +456,7 @@ class NativeGeminiBackend(ProviderBackend):
                         )
                     except json.JSONDecodeError:
                         fn_args = {}
+
                     parts.append(
                         types.Part.from_function_call(name=fn_name, args=fn_args)
                     )
@@ -567,16 +568,33 @@ class NativeGeminiBackend(ProviderBackend):
             ]
 
         # Grounding with Google Search (Phase 5)
+        has_builtin_tools = False
         if self._grounding:
             existing_tools = config_kwargs.get("tools", [])
             existing_tools.append(types.Tool(google_search=types.GoogleSearch()))
             config_kwargs["tools"] = existing_tools
+            has_builtin_tools = True
 
         # Code execution (Phase 5)
         if self._code_execution:
             existing_tools = config_kwargs.get("tools", [])
             existing_tools.append(types.Tool(code_execution=types.ToolCodeExecution()))
             config_kwargs["tools"] = existing_tools
+            has_builtin_tools = True
+
+        # When built-in tools (grounding/code_execution) are combined with
+        # function tools, the API requires include_server_side_tool_invocations.
+        if has_builtin_tools and tools_schema:
+            existing_tc = config_kwargs.get("tool_config")
+            if existing_tc is not None:
+                # Rebuild with the existing mode + the new flag
+                mode = existing_tc.function_calling_config.mode
+            else:
+                mode = "AUTO"
+            config_kwargs["tool_config"] = types.ToolConfig(
+                function_calling_config=types.FunctionCallingConfig(mode=mode),
+                include_server_side_tool_invocations=True,
+            )
 
         return types.GenerateContentConfig(**config_kwargs)
 
@@ -608,13 +626,12 @@ class NativeGeminiBackend(ProviderBackend):
                 content_text += part.text
             elif hasattr(part, "function_call") and part.function_call:
                 fc = part.function_call
-                tool_calls.append(
-                    _make_tool_call(
-                        tc_id=f"call_{uuid.uuid4().hex[:24]}",
-                        name=fc.name,
-                        arguments=json.dumps(dict(fc.args)) if fc.args else "{}",
-                    )
+                tc = _make_tool_call(
+                    tc_id=f"call_{uuid.uuid4().hex[:24]}",
+                    name=fc.name,
+                    arguments=json.dumps(dict(fc.args)) if fc.args else "{}",
                 )
+                tool_calls.append(tc)
 
         return _make_response(
             content=content_text or None,

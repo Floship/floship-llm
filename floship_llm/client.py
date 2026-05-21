@@ -1098,13 +1098,23 @@ class LLM:
         if not system and not tools and not contents:
             return None
 
-        ref = self._google_cache_manager.create_or_get(
-            model=self.model,
-            system=system,
-            contents=contents,
-            tools=tools,
-            version=self._context_cache_version,
-        )
+        try:
+            ref = self._google_cache_manager.create_or_get(
+                model=self.model,
+                system=system,
+                contents=contents,
+                tools=tools,
+                version=self._context_cache_version,
+            )
+        except Exception as cache_err:
+            # Cache creation can fail for many reasons (content too small,
+            # validation errors with tools, quota limits).  Fall back to
+            # a normal non-cached request rather than crashing.
+            logger.warning(
+                "Context cache creation failed, falling back to non-cached: %s",
+                cache_err,
+            )
+            return None
         self._active_cache_ref = ref
         return ref
 

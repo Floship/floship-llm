@@ -705,6 +705,85 @@ class TestConfigBuilding:
             # ToolConfig with mode=ANY (mapped from "required")
             mock_types.FunctionCallingConfig.assert_called_once_with(mode="ANY")
 
+    def test_grounding_with_function_tools_sets_server_invocations(self):
+        """Bug 2: grounding + function tools sets include_server_side_tool_invocations."""
+        with patch("floship_llm.backends.native_gemini._require_genai") as mock_req:
+            mock_genai = Mock()
+            mock_types = Mock()
+            mock_req.return_value = (mock_genai, mock_types)
+            backend = NativeGeminiBackend(api_key="k", model="m", grounding=True)
+
+            mock_genai.Client.return_value.models.generate_content.return_value = (
+                _mock_gemini_response("ok")
+            )
+
+            tools = [
+                {
+                    "type": "function",
+                    "function": {"name": "fn", "description": "d"},
+                }
+            ]
+
+            backend.chat(
+                model="m",
+                messages=[{"role": "user", "content": "hi"}],
+                tools=tools,
+            )
+
+            # ToolConfig should have include_server_side_tool_invocations=True
+            tc_call = mock_types.ToolConfig.call_args
+            assert tc_call is not None
+            assert tc_call[1]["include_server_side_tool_invocations"] is True
+
+    def test_grounding_without_function_tools_no_server_invocations(self):
+        """Grounding alone does NOT set include_server_side_tool_invocations."""
+        with patch("floship_llm.backends.native_gemini._require_genai") as mock_req:
+            mock_genai = Mock()
+            mock_types = Mock()
+            mock_req.return_value = (mock_genai, mock_types)
+            backend = NativeGeminiBackend(api_key="k", model="m", grounding=True)
+
+            mock_genai.Client.return_value.models.generate_content.return_value = (
+                _mock_gemini_response("ok")
+            )
+
+            backend.chat(
+                model="m",
+                messages=[{"role": "user", "content": "hi"}],
+            )
+
+            # ToolConfig should NOT have been called (no function tools)
+            mock_types.ToolConfig.assert_not_called()
+
+    def test_code_execution_with_function_tools_sets_server_invocations(self):
+        """Code execution + function tools also sets the flag."""
+        with patch("floship_llm.backends.native_gemini._require_genai") as mock_req:
+            mock_genai = Mock()
+            mock_types = Mock()
+            mock_req.return_value = (mock_genai, mock_types)
+            backend = NativeGeminiBackend(api_key="k", model="m", code_execution=True)
+
+            mock_genai.Client.return_value.models.generate_content.return_value = (
+                _mock_gemini_response("ok")
+            )
+
+            tools = [
+                {
+                    "type": "function",
+                    "function": {"name": "fn", "description": "d"},
+                }
+            ]
+
+            backend.chat(
+                model="m",
+                messages=[{"role": "user", "content": "hi"}],
+                tools=tools,
+            )
+
+            tc_call = mock_types.ToolConfig.call_args
+            assert tc_call is not None
+            assert tc_call[1]["include_server_side_tool_invocations"] is True
+
 
 # ---------------------------------------------------------------------------
 # LLM integration tests

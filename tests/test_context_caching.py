@@ -671,3 +671,54 @@ class TestLLMCacheIntegration:
         with patch("floship_llm.client.OpenAI"):
             llm = LLM()
             llm.clear_cache()  # Should not raise
+
+
+class TestCacheCreationErrorHandling:
+    """Tests for Bug 3 & 4: cache creation errors handled gracefully."""
+
+    @patch.dict(
+        os.environ,
+        {
+            "INFERENCE_URL": GOOGLE_URL,
+            "INFERENCE_KEY": "test-key",
+            "INFERENCE_MODEL_ID": "gemini-2.5-flash",
+        },
+    )
+    def test_ensure_cache_catches_validation_error(self):
+        """Bug 3: cache creation ValidationError does not crash."""
+        with patch("floship_llm.client.OpenAI"):
+            mock_cm = Mock()
+            mock_cm.create_or_get.side_effect = Exception(
+                "ValidationError: 2 validation errors for CreateCachedContentConfig"
+            )
+
+            llm = LLM(enable_context_cache=True)
+            llm._google_cache_manager = mock_cm
+            llm.add_message("system", "You are a helper")
+
+            result = llm._ensure_context_cache()
+            assert result is None
+            assert llm._active_cache_ref is None
+
+    @patch.dict(
+        os.environ,
+        {
+            "INFERENCE_URL": GOOGLE_URL,
+            "INFERENCE_KEY": "test-key",
+            "INFERENCE_MODEL_ID": "gemini-2.5-flash",
+        },
+    )
+    def test_ensure_cache_catches_too_small_error(self):
+        """Bug 4: 400 for too-small content does not crash."""
+        with patch("floship_llm.client.OpenAI"):
+            mock_cm = Mock()
+            mock_cm.create_or_get.side_effect = Exception(
+                "400 INVALID_ARGUMENT: Cached content is too small"
+            )
+
+            llm = LLM(enable_context_cache=True)
+            llm._google_cache_manager = mock_cm
+            llm.add_message("system", "Hi")
+
+            result = llm._ensure_context_cache()
+            assert result is None
