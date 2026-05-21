@@ -922,8 +922,8 @@ class TestLLM:
 
             result = llm.process_response(mock_response)
 
-            # The method returns the original content, but processes and strips for internal use
-            assert result == "  Test response  "
+            # The method returns cleaned content (stripped whitespace/reasoning tags)
+            assert result == "Test response"
             assert len(llm.messages) == 1
             assert llm.messages[0]["role"] == "assistant"
             assert llm.messages[0]["content"] == "Test response"
@@ -942,9 +942,9 @@ class TestLLM:
 
             result = llm.process_response(mock_response)
 
-            # Returns original content since no response_format is set
-            assert result == "<reasoning>Some thinking</reasoning>Final response"
-            # But internal processing should remove think tags
+            # Returns cleaned content with reasoning tags stripped
+            assert result == "Final response"
+            # Message history also has clean content
             assert llm.messages[-1]["content"] == "Final response"
 
     def test_extended_thinking_strips_thinking_tags_from_history(self):
@@ -970,12 +970,9 @@ class TestLLM:
 
             result = llm.process_response(mock_response)
 
-            # Returns original content (includes thinking tags)
-            assert (
-                result
-                == "<reasoning>I'm reasoning about this</reasoning>Here is my response"
-            )
-            # But message history should NOT have thinking tags (to avoid 500 errors)
+            # Returns cleaned content (reasoning tags stripped)
+            assert result == "Here is my response"
+            # Message history should NOT have thinking tags (to avoid 500 errors)
             assert llm.messages[-1]["role"] == "assistant"
             assert "<reasoning>" not in llm.messages[-1]["content"]
             # Raw response should still have thinking tags
@@ -1234,9 +1231,9 @@ class TestLLM:
 
             result = llm.process_response(mock_response)
 
-            # Returns original content since no response_format is set
-            assert result == "Some text<response>Real response</response>More text"
-            # But internal processing should extract response content
+            # Returns extracted response content (tags stripped)
+            assert result == "Real response"
+            # Message history also has extracted content
             assert llm.messages[-1]["content"] == "Real response"
 
     def test_process_response_max_length_exceeded(self):
@@ -2423,3 +2420,339 @@ class TestResponseFormatThinkingWrapper:
             # Case 3: No response_format - extended_thinking should remain
             llm3 = LLM(extended_thinking={"enabled": True, "budget_tokens": 1024})
             assert llm3.extended_thinking == {"enabled": True, "budget_tokens": 1024}
+
+
+class TestGoogleAICompat:
+    """Tests for Google AI provider compatibility features."""
+
+    def setup_method(self):
+        self.env_vars = {
+            "INFERENCE_URL": GOOGLE_URL,
+            "INFERENCE_MODEL_ID": "gemini-3-flash",
+            "INFERENCE_KEY": "test-google-key",
+        }
+        self.env_patcher = patch.dict(os.environ, self.env_vars, clear=False)
+        self.env_patcher.start()
+
+    def teardown_method(self):
+        self.env_patcher.stop()
+
+    def test_thought_signature_injected_when_missing(self):
+        """Gemini 3+ requires thought_signature on first tool_call.
+        _validate_messages_for_api should inject dummy when missing."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            assert llm._provider == "google"
+
+            messages = [
+                {"role": "user", "content": "hello"},
+                {
+                    "role": "assistant",
+                    "content": ".",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_data", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "result"},
+            ]
+            validated = llm._validate_messages_for_api(messages)
+            assistant_msg = next(m for m in validated if m.get("tool_calls"))
+            first_tc = assistant_msg["tool_calls"][0]
+            assert "extra_content" in first_tc
+            assert (
+                first_tc["extra_content"]["google"]["thought_signature"]
+                == "skip_thought_signature_validator"
+            )
+
+    def test_thought_signature_preserved_when_present(self):
+        """Don't overwrite real thought_signature with dummy."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+
+            messages = [
+                {"role": "user", "content": "hello"},
+                {
+                    "role": "assistant",
+                    "content": ".",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_data", "arguments": "{}"},
+                            "extra_content": {
+                                "google": {"thought_signature": "real_sig_abc"}
+                            },
+                        }
+                    ],
+                },
+            ]
+            validated = llm._validate_messages_for_api(messages)
+            assistant_msg = next(m for m in validated if m.get("tool_calls"))
+            first_tc = assistant_msg["tool_calls"][0]
+            assert (
+                first_tc["extra_content"]["google"]["thought_signature"]
+                == "real_sig_abc"
+            )
+
+    def test_thought_signature_not_injected_for_heroku(self):
+        """Heroku provider should not get thought_signature injection."""
+        with patch.dict(os.environ, {"INFERENCE_URL": HEROKU_URL}):
+            with patch("floship_llm.client.OpenAI"):
+                llm = LLM()
+                assert llm._provider == "heroku"
+
+                messages = [
+                    {"role": "user", "content": "hello"},
+                    {
+                        "role": "assistant",
+                        "content": ".",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "get_data", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                ]
+                validated = llm._validate_messages_for_api(messages)
+                assistant_msg = next(m for m in validated if m.get("tool_calls"))
+                first_tc = assistant_msg["tool_calls"][0]
+                assert "extra_content" not in first_tc
+
+    def test_embedding_model_auto_mapped(self):
+        """cohere-embed-multilingual should auto-map to text-embedding-004 on Google AI."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(type="embedding", model="cohere-embed-multilingual")
+            assert llm._provider == "google"
+            assert llm.model == "text-embedding-004"
+
+    def test_embedding_model_not_mapped_on_heroku(self):
+        """cohere-embed-multilingual should stay as-is on Heroku."""
+        with patch.dict(os.environ, {"INFERENCE_URL": HEROKU_URL}):
+            with patch("floship_llm.client.OpenAI"):
+                llm = LLM(type="embedding", model="cohere-embed-multilingual")
+                assert llm._provider == "heroku"
+                assert llm.model == "cohere-embed-multilingual"
+
+    def test_inference_url_kwarg_overrides_env(self):
+        """inference_url kwarg should override INFERENCE_URL env var."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(inference_url=HEROKU_URL)
+            assert llm.base_url == HEROKU_URL
+            assert llm._provider == "heroku"
+
+    def test_inference_key_kwarg_overrides_env(self):
+        """inference_key kwarg should override INFERENCE_KEY env var."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(inference_key="custom-key-123")  # pragma: allowlist secret
+            assert llm.api_key == "custom-key-123"  # pragma: allowlist secret
+
+    def test_parallel_tool_calls_only_first_gets_signature(self):
+        """For parallel tool calls, only the first should get thought_signature."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+
+            messages = [
+                {"role": "user", "content": "check weather in Paris and London"},
+                {
+                    "role": "assistant",
+                    "content": ".",
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"city":"Paris"}',
+                            },
+                        },
+                        {
+                            "id": "call_2",
+                            "type": "function",
+                            "function": {
+                                "name": "get_weather",
+                                "arguments": '{"city":"London"}',
+                            },
+                        },
+                    ],
+                },
+            ]
+            validated = llm._validate_messages_for_api(messages)
+            assistant_msg = next(m for m in validated if m.get("tool_calls"))
+            assert "extra_content" in assistant_msg["tool_calls"][0]
+            assert "extra_content" not in assistant_msg["tool_calls"][1]
+
+    def test_missing_base_url_raises(self):
+        """ValueError when INFERENCE_URL env var missing."""
+        with patch.dict(os.environ, {}, clear=True):
+            with pytest.raises(
+                ValueError, match="INFERENCE_URL environment variable must be set"
+            ):
+                LLM()
+
+    def test_missing_api_key_raises(self):
+        """ValueError when INFERENCE_KEY env var missing."""
+        with patch.dict(
+            os.environ,
+            {"INFERENCE_URL": GOOGLE_URL, "INFERENCE_MODEL_ID": "m"},
+            clear=True,
+        ):
+            with pytest.raises(
+                ValueError, match="INFERENCE_KEY environment variable must be set"
+            ):
+                LLM()
+
+    def test_missing_model_raises(self):
+        """ValueError when INFERENCE_MODEL_ID env var missing."""
+        with patch.dict(
+            os.environ,
+            {"INFERENCE_URL": GOOGLE_URL, "INFERENCE_KEY": "k"},
+            clear=True,
+        ):
+            with pytest.raises(
+                ValueError, match="INFERENCE_MODEL_ID environment variable must be set"
+            ):
+                LLM()
+
+    def test_model_kwarg_overrides_env(self):
+        """model kwarg should override INFERENCE_MODEL_ID env var."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(model="custom-model-7b")
+            assert llm.model == "custom-model-7b"
+
+    def test_api_key_kwarg_alias(self):
+        """api_key kwarg should work as alias for inference_key."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(api_key="alias-key-456")  # pragma: allowlist secret
+            assert llm.api_key == "alias-key-456"  # pragma: allowlist secret
+
+    def test_embedding_model_cohere_english_mapped(self):
+        """cohere-embed-english should also map to text-embedding-004."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(type="embedding", model="cohere-embed-english")
+            assert llm.model == "text-embedding-004"
+
+    def test_waf_auto_disabled_for_google(self):
+        """Google AI provider should auto-disable WAF sanitization."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            assert llm._provider == "google"
+            assert llm.waf_config.enable_waf_sanitization is False
+
+    def test_waf_stays_enabled_for_heroku(self):
+        """Heroku provider should keep WAF sanitization enabled by default."""
+        with patch.dict(os.environ, {"INFERENCE_URL": HEROKU_URL}):
+            with patch("floship_llm.client.OpenAI"):
+                llm = LLM()
+                assert llm._provider == "heroku"
+                assert llm.waf_config.enable_waf_sanitization is True
+
+    def test_build_tool_free_messages(self):
+        """_build_tool_free_messages strips tool roles and tool_calls."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            llm.messages = [
+                {"role": "system", "content": "You are helpful."},
+                {"role": "user", "content": "Do something"},
+                {
+                    "role": "assistant",
+                    "content": "Calling tool",
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": "t", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "c1", "content": "tool result"},
+                {"role": "assistant", "content": "Done"},
+            ]
+            result = llm._build_tool_free_messages("(tools ran)")
+            roles = [m["role"] for m in result]
+            assert "tool" not in roles
+            # assistant with tool_calls should have tool_calls removed + note appended
+            assistant_with_note = result[2]
+            assert "tool_calls" not in assistant_with_note
+            assert "(tools ran)" in assistant_with_note["content"]
+            assert "Calling tool" in assistant_with_note["content"]
+            assert len(result) == 4  # system, user, assistant(+note), assistant
+
+    def test_build_tool_free_messages_empty_content(self):
+        """_build_tool_free_messages handles assistant with no content."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+            llm.messages = [
+                {"role": "user", "content": "hi"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "c1",
+                            "type": "function",
+                            "function": {"name": "t", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "c1", "content": "ok"},
+            ]
+            result = llm._build_tool_free_messages("note")
+            assert result[1]["content"] == "note"
+
+    def test_wants_thinking_mode(self):
+        """_wants_thinking_mode returns correct values."""
+        with patch("floship_llm.client.OpenAI"):
+            # Dict with enabled=True
+            llm = LLM(extended_thinking={"enabled": True, "budget_tokens": 1024})
+            assert llm._wants_thinking_mode() is True
+
+            # Dict with enabled=False
+            llm2 = LLM(extended_thinking={"enabled": False})
+            assert llm2._wants_thinking_mode() is False
+
+            # None
+            llm3 = LLM()
+            assert llm3._wants_thinking_mode() is False
+
+    def test_can_use_extended_thinking(self):
+        """can_use_extended_thinking checks config and tool history."""
+        with patch("floship_llm.client.OpenAI"):
+            # Not configured
+            llm = LLM()
+            assert llm.can_use_extended_thinking() is False
+
+            # Configured with dict enabled=False
+            llm2 = LLM(extended_thinking={"enabled": False})
+            assert llm2.can_use_extended_thinking() is False
+
+            # Configured with bool False
+            llm3 = LLM(extended_thinking=False)
+            assert llm3.can_use_extended_thinking() is False
+
+    def test_restore_extended_thinking(self):
+        """restore_extended_thinking restores or refuses appropriately."""
+        with patch("floship_llm.client.OpenAI"):
+            # Never configured
+            llm = LLM()
+            assert llm.restore_extended_thinking() is False
+
+            # Configured, no tool history -> should restore
+            llm2 = LLM(extended_thinking={"enabled": True, "budget_tokens": 512})
+            llm2.extended_thinking = None
+            llm2._thinking_auto_disabled = True
+            assert llm2.restore_extended_thinking() is True
+            assert llm2.extended_thinking == {"enabled": True, "budget_tokens": 512}
+
+            # Has tool history -> cannot restore
+            llm3 = LLM(extended_thinking={"enabled": True, "budget_tokens": 512})
+            llm3.messages = [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": ".", "tool_calls": [{"id": "c1"}]},
+            ]
+            assert llm3.restore_extended_thinking() is False

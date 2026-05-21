@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-05-21
+
+### Added
+- **Gemini thought_signature auto-injection:** `_validate_messages_for_api` injects dummy `skip_thought_signature_validator` on the first tool_call for Google AI provider when `extra_content` is missing, preventing Gemini 3+ 400 errors.
+- **Embedding model auto-mapping:** `cohere-embed-multilingual` and `cohere-embed-english` are auto-mapped to `text-embedding-004` when provider is Google AI, preventing 404 errors.
+- **Constructor kwargs:** `inference_url`, `inference_key`, and `api_key` kwargs override environment variables, allowing per-instance configuration.
+- **`model` kwarg:** `model` parameter overrides `INFERENCE_MODEL_ID` env var.
+
+### Changed
+- **DRY refactoring:** Extracted `_finalize_response()`, `_parse_structured_output()`, `_fallback_to_pseudo_thinking()`, `_raise_waf_error()` helpers from `process_response()` and `_process_streaming_response()`.
+- **Content cleaning:** `process_response()` now strips reasoning tags before returning, fixing inconsistency between streaming and non-streaming paths.
+
 ## [0.6.0] - 2026-05-21
 
 ### Added

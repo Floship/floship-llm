@@ -568,11 +568,23 @@ class LLM:
             raise ValueError("type must be 'completion' or 'embedding'")
 
         # Initialize OpenAI client
-        self.base_url = os.environ["INFERENCE_URL"]
-        self.api_key = kwargs.get("api_key", os.environ.get("INFERENCE_KEY"))
+        # Accept inference_url/inference_key kwargs to allow separate endpoints
+        # (e.g. Heroku for embeddings, Google AI for completions)
+        self.base_url = (
+            kwargs.get("inference_url") or os.environ.get("INFERENCE_URL") or ""
+        )
+        if not self.base_url:
+            raise ValueError(
+                "Base URL must be provided via inference_url parameter or INFERENCE_URL environment variable"
+            )
+        self.api_key = (
+            kwargs.get("inference_key")
+            or kwargs.get("api_key")
+            or os.environ.get("INFERENCE_KEY")
+        )
         if not self.api_key:
             raise ValueError(
-                "API key must be provided via api_key parameter or INFERENCE_KEY environment variable"
+                "API key must be provided via inference_key/api_key parameter or INFERENCE_KEY environment variable"
             )
 
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
@@ -585,7 +597,31 @@ class LLM:
             self.waf_config.enable_waf_sanitization = False
 
         # Model configuration
-        self.model = kwargs.get("model", os.environ["INFERENCE_MODEL_ID"])
+        self.model = kwargs.get("model") or os.environ.get("INFERENCE_MODEL_ID", "")
+        if not self.model:
+            raise ValueError(
+                "Model must be provided via model parameter or INFERENCE_MODEL_ID environment variable"
+            )
+
+        # Auto-map Heroku-specific embedding models for Google AI provider
+        _GOOGLE_EMBEDDING_MODEL_MAP = {
+            "cohere-embed-multilingual": "text-embedding-004",
+            "cohere-embed-english": "text-embedding-004",
+        }
+        if (
+            self.type == "embedding"
+            and self._provider == "google"
+            and self.model in _GOOGLE_EMBEDDING_MODEL_MAP
+        ):
+            mapped = _GOOGLE_EMBEDDING_MODEL_MAP[self.model]
+            logger.warning(
+                "Embedding model %r is not available on Google AI. "
+                "Auto-mapping to %r. Set model=%r explicitly to suppress this warning.",
+                self.model,
+                mapped,
+                mapped,
+            )
+            self.model = mapped
         self.temperature = kwargs.get("temperature", 0.15)
 
         # Heroku-specific parameters (for completions)
@@ -2151,9 +2187,7 @@ class LLM:
                     and self._should_disable_extended_thinking(e)
                 ):
                     extended_thinking_disabled_for_retry = True
-                    self.extended_thinking = None
-                    self._thinking_auto_disabled = True
-                    self._use_pseudo_thinking = True
+                    self._fallback_to_pseudo_thinking()
                     logger.warning(
                         "Extended thinking was rejected by the API; "
                         "switching to pseudo-thinking mode (prompt-based <reasoning> tags)."
@@ -2201,18 +2235,7 @@ class LLM:
 
                 # CloudFront WAF 403 — fail fast, raise for Sentry capture
                 if self._is_cloudfront_403(e):
-                    self.waf_metrics.cloudfront_403_errors += 1
-                    self.waf_metrics.failed_requests += 1
-                    detected_blockers = self._log_waf_blocked_content(
-                        self.messages, "(prompt method)"
-                    )
-                    raise CloudFrontWAFError(
-                        message="CloudFront WAF blocked request",
-                        messages=self.messages.copy(),
-                        detected_blockers=detected_blockers,
-                        context="prompt method",
-                        original_error=e,
-                    ) from e
+                    self._raise_waf_error(e, "prompt method")
 
                 self.waf_metrics.failed_requests += 1
 
@@ -2332,9 +2355,7 @@ class LLM:
                     and self._should_disable_extended_thinking(e)
                 ):
                     extended_thinking_disabled_for_retry = True
-                    self.extended_thinking = None
-                    self._thinking_auto_disabled = True
-                    self._use_pseudo_thinking = True
+                    self._fallback_to_pseudo_thinking()
                     logger.warning(
                         "Extended thinking was rejected by the API; "
                         "switching to pseudo-thinking mode (streaming)."
@@ -2365,19 +2386,8 @@ class LLM:
 
                 # CloudFront WAF 403 — fail fast, raise for Sentry capture
                 if self._is_cloudfront_403(e):
-                    self.waf_metrics.cloudfront_403_errors += 1
-                    self.waf_metrics.failed_requests += 1
-                    detected_blockers = self._log_waf_blocked_content(
-                        self.messages, "(prompt_stream method)"
-                    )
                     self.extended_thinking = original_extended_thinking
-                    raise CloudFrontWAFError(
-                        message="CloudFront WAF blocked streaming request",
-                        messages=self.messages.copy(),
-                        detected_blockers=detected_blockers,
-                        context="prompt_stream method",
-                        original_error=e,
-                    ) from e
+                    self._raise_waf_error(e, "prompt_stream method")
 
                 self.waf_metrics.failed_requests += 1
                 if self.waf_config.debug_mode:
@@ -2415,6 +2425,182 @@ class LLM:
 
     # ========== Response Processing ==========
 
+    def _fallback_to_pseudo_thinking(self) -> None:
+        """Switch from native extended thinking to prompt-based pseudo-thinking."""
+        self.extended_thinking = None
+        self._thinking_auto_disabled = True
+        self._use_pseudo_thinking = True
+
+    def _raise_waf_error(self, error: Exception, context: str) -> None:
+        """Handle CloudFront WAF 403 error: update metrics, log, and raise CloudFrontWAFError."""
+        self.waf_metrics.cloudfront_403_errors += 1
+        self.waf_metrics.failed_requests += 1
+        detected_blockers = self._log_waf_blocked_content(self.messages, f"({context})")
+        raise CloudFrontWAFError(
+            message=f"CloudFront WAF blocked request in {context}",
+            messages=self.messages.copy(),
+            detected_blockers=detected_blockers,
+            context=context,
+            original_error=error,
+        ) from error
+
+    def _parse_structured_output(self, message: str) -> Any:
+        """
+        Parse structured output from an LLM response message.
+
+        Handles truncation detection, JSON extraction, validation, and unwrapping.
+
+        Args:
+            message: Cleaned response message (no reasoning tags)
+
+        Returns:
+            Parsed Pydantic model instance, or raw text if fallback is enabled
+
+        Raises:
+            TruncatedResponseError: If JSON appears truncated
+            ValueError: If JSON cannot be extracted and no fallback
+        """
+        logger.info(f"Original message: {message}")
+
+        if self.waf_config.debug_mode:
+            logger.debug(f"Attempting to parse as {self.response_format.__name__}")
+
+        if lm_json_utils.is_truncated_json(message):
+            logger.warning(
+                f"Detected truncated JSON response (likely max_completion_tokens too low). "
+                f"Response ends with: ...{message[-100:]}"
+            )
+            raise TruncatedResponseError(
+                "Response appears truncated - JSON is incomplete. "
+                "Consider increasing max_completion_tokens.",
+                raw_response=message,
+            )
+
+        json_message = lm_json_utils.extract_strict_json(message)
+        logger.info(f"Parsed message: {json_message}")
+
+        if not json_message:
+            logger.warning(
+                f"Failed to extract JSON from response. "
+                f"Response was: {message[:500]}..."
+            )
+            if self.allow_response_format_fallback:
+                logger.warning(
+                    "Structured output parsing failed; returning raw text because "
+                    "allow_response_format_fallback=True"
+                )
+                return message
+            try:
+                default_model = self.response_format()
+                return self._unwrap_thinking_response(default_model)
+            except Exception as e:
+                logger.error(f"Failed to create default model: {e}")
+                raise ValueError(
+                    f"Could not extract valid JSON from LLM response. "
+                    f"Raw response: {message[:200]}..."
+                )
+
+        try:
+            parsed = self.response_format.model_validate_json(json_message)
+        except Exception as parse_error:
+            if self.allow_response_format_fallback:
+                logger.warning(
+                    "Structured output validation failed; returning raw text because "
+                    "allow_response_format_fallback=True: %s",
+                    parse_error,
+                )
+                return message
+            raise
+        return self._unwrap_thinking_response(parsed)
+
+    def _finalize_response(self, raw_message: str, response_obj=None) -> Any:
+        """
+        Finalize an LLM response from either streaming or non-streaming path.
+
+        Handles: reasoning extraction (native + pseudo-thinking), tag stripping,
+        max length check, message history storage, callback invocation,
+        and structured output parsing.
+
+        Args:
+            raw_message: Raw response text (may contain reasoning tags)
+            response_obj: Optional API response object (for native extended_thinking reasoning)
+
+        Returns:
+            Processed response text or structured output (Pydantic model instance)
+        """
+        if not raw_message:
+            logger.warning("Received empty response from LLM")
+            return ""
+
+        raw_message = raw_message.strip()
+        self._last_raw_response = raw_message
+
+        # Extract reasoning from available sources
+        self._last_native_reasoning = None
+
+        # 1. Native reasoning from extended_thinking API response
+        if response_obj:
+            try:
+                reasoning_obj = getattr(
+                    response_obj.choices[0].message, "reasoning", None
+                )
+                if reasoning_obj is not None:
+                    thinking = getattr(reasoning_obj, "thinking", None)
+                    if thinking and isinstance(thinking, str):
+                        self._last_native_reasoning = thinking
+                        logger.debug(
+                            f"Native reasoning extracted ({len(self._last_native_reasoning)} chars)"
+                        )
+            except (AttributeError, TypeError, IndexError):
+                pass
+
+        # 2. Pseudo-thinking <reasoning> tags
+        if not self._last_native_reasoning:
+            thinking_match = re.search(
+                r"<reasoning>(.*?)</reasoning>", raw_message, flags=re.DOTALL
+            )
+            if thinking_match:
+                self._last_native_reasoning = thinking_match.group(1).strip()
+                logger.debug(
+                    f"Pseudo-thinking reasoning extracted ({len(self._last_native_reasoning)} chars)"
+                )
+
+        # Strip reasoning tags from message content
+        message = re.sub(
+            r"<reasoning>.*?</reasoning>", "", raw_message, flags=re.DOTALL
+        ).strip()
+
+        # Extract response tags if present
+        if "<response>" in message and "</response>" in message:
+            match = re.search(r"<response>(.*?)</response>", message, flags=re.DOTALL)
+            if match:
+                message = match.group(1)
+
+        # Check max length
+        if len(message) > self.max_length:
+            logger.warning(f"Max length exceeded: {len(message)} > {self.max_length}")
+            retry_result = self.retry_prompt()
+            if retry_result is not None:
+                return retry_result
+
+        # Add cleaned message to conversation history
+        self.add_message("assistant", message)
+
+        # Invoke callback for final assistant message (no tool calls)
+        if self.on_assistant_message:
+            try:
+                self.on_assistant_message(message.strip(), False)
+            except Exception as callback_error:
+                logger.warning(
+                    f"on_assistant_message callback raised an exception: {callback_error}"
+                )
+
+        # Handle structured output
+        if self.require_response_format:
+            return self._parse_structured_output(message)
+
+        return message
+
     def process_response(self, response, stream_final_response: bool = False) -> str:
         """
         Process LLM response, handling tool calls if present.
@@ -2447,142 +2633,16 @@ class LLM:
                 pass  # Mock object, skip tool handling
 
         # Handle regular message
-        if not choice.message.content:
-            logger.warning("Received empty response from LLM")
-            return ""
-
-        raw_message = choice.message.content.strip()
-
-        # Store raw response for debugging (includes thinking tags)
-        self._last_raw_response = raw_message
-
-        # Extract reasoning from response (native API or pseudo-thinking tags)
-        # When include_reasoning=True, the API returns message.reasoning.thinking
-        # For pseudo-thinking, we extract from <reasoning> tags
-        self._last_native_reasoning = None
-
-        # First check for native reasoning from extended_thinking API response
-        try:
-            reasoning_obj = getattr(choice.message, "reasoning", None)
-            if reasoning_obj is not None:
-                thinking = getattr(reasoning_obj, "thinking", None)
-                if thinking and isinstance(thinking, str):
-                    self._last_native_reasoning = thinking
-                    logger.debug(
-                        f"Native reasoning extracted ({len(self._last_native_reasoning)} chars)"
-                    )
-        except (AttributeError, TypeError):
-            pass  # No native reasoning available
-
-        # If no native reasoning, check for pseudo-thinking <reasoning> tags
-        if not self._last_native_reasoning:
-            thinking_match = re.search(
-                r"<reasoning>(.*?)</reasoning>", raw_message, flags=re.DOTALL
-            )
-            if thinking_match:
-                self._last_native_reasoning = thinking_match.group(1).strip()
-                logger.debug(
-                    f"Pseudo-thinking reasoning extracted ({len(self._last_native_reasoning)} chars)"
-                )
-
-        # Always strip <reasoning> tags from message for clean response
-        message = re.sub(
-            r"<reasoning>.*?</reasoning>", "", raw_message, flags=re.DOTALL
-        ).strip()
-
-        # Extract response tags if present
-        if "<response>" in message and "</response>" in message:
-            message = re.search(
-                r"<response>(.*?)</response>", message, flags=re.DOTALL
-            ).group(1)
-
-        # Check max length
-        if len(message) > self.max_length:
-            logger.warning(f"Max length exceeded: {len(message)} > {self.max_length}")
-            retry_result = self.retry_prompt()
-            if retry_result is not None:
-                return retry_result
-
-        # ALWAYS strip thinking tags from message history
-        # Heroku's OpenAI-compatible API causes 500 errors if <reasoning> tags are in history
-        # Raw response (with thinking) is preserved in _last_raw_response for user access
-        self.add_message("assistant", message)
-
-        # Invoke callback for final assistant message (no tool calls)
-        if self.on_assistant_message:
-            try:
-                self.on_assistant_message(message.strip(), False)
-            except Exception as callback_error:
-                logger.warning(
-                    f"on_assistant_message callback raised an exception: {callback_error}"
-                )
-
-        # Handle structured output
-        if self.require_response_format:
-            logger.info(f"Original message: {message}")
-
-            # Check for truncated JSON before attempting extraction
-            if lm_json_utils.is_truncated_json(message):
-                logger.warning(
-                    f"Detected truncated JSON response (likely max_completion_tokens too low). "
-                    f"Response ends with: ...{message[-100:]}"
-                )
-                raise TruncatedResponseError(
-                    "Response appears truncated - JSON is incomplete. "
-                    "Consider increasing max_completion_tokens.",
-                    raw_response=message,
-                )
-
-            json_message = lm_json_utils.extract_strict_json(message)
-            logger.info(f"Parsed message: {json_message}")
-
-            if not json_message:
-                logger.warning(
-                    f"Failed to extract JSON from response. "
-                    f"Response was: {message[:500]}..."
-                )
-                if self.allow_response_format_fallback:
-                    logger.warning(
-                        "Structured output parsing failed; returning raw text because "
-                        "allow_response_format_fallback=True"
-                    )
-                    logger.warning(f"Returning raw message: {message}")
-                    return message
-                # Return empty model with defaults rather than failing
-                try:
-                    default_model = self.response_format()
-                    return self._unwrap_thinking_response(default_model)
-                except Exception as e:
-                    logger.error(f"Failed to create default model: {e}")
-                    raise ValueError(
-                        f"Could not extract valid JSON from LLM response. "
-                        f"Raw response: {message[:200]}..."
-                    )
-
-            try:
-                parsed = self.response_format.model_validate_json(json_message)
-            except Exception as parse_error:
-                if self.allow_response_format_fallback:
-                    logger.warning(
-                        "Structured output validation failed; returning raw text because "
-                        "allow_response_format_fallback=True: %s",
-                        parse_error,
-                    )
-                    return message
-                raise
-            return self._unwrap_thinking_response(parsed)
-
-        return response.choices[0].message.content
+        return self._finalize_response(
+            choice.message.content.strip() if choice.message.content else "",
+            response_obj=response,
+        )
 
     def _process_streaming_response(self, full_response: str) -> str:
         """
         Process a response collected from streaming.
 
-        This handles the same processing as process_response but for streamed content:
-        - Removes thinking tags
-        - Extracts response tags
-        - Checks max length
-        - Handles structured output (response_format)
+        Delegates to _finalize_response() for unified response processing.
 
         Args:
             full_response: The complete response text collected from streaming chunks
@@ -2590,123 +2650,7 @@ class LLM:
         Returns:
             Processed response text or structured output (Pydantic model instance)
         """
-        if not full_response:
-            logger.warning("Received empty response from streaming")
-            return ""
-
-        raw_message = full_response.strip()
-
-        # Store raw response for debugging (includes thinking tags)
-        self._last_raw_response = raw_message
-
-        if self.waf_config.debug_mode:
-            logger.debug(
-                f"Raw streaming response ({len(raw_message)} chars): {raw_message[:500]}..."
-            )
-
-        # Extract reasoning from pseudo-thinking <reasoning> tags (streaming doesn't have native reasoning)
-        self._last_native_reasoning = None
-        thinking_match = re.search(
-            r"<reasoning>(.*?)</reasoning>", raw_message, flags=re.DOTALL
-        )
-        if thinking_match:
-            self._last_native_reasoning = thinking_match.group(1).strip()
-            logger.debug(
-                f"Pseudo-thinking reasoning extracted ({len(self._last_native_reasoning)} chars)"
-            )
-
-        # Always strip <reasoning> tags from message for clean response
-        message = re.sub(
-            r"<reasoning>.*?</reasoning>", "", raw_message, flags=re.DOTALL
-        ).strip()
-
-        # Extract response tags if present
-        if "<response>" in message and "</response>" in message:
-            match = re.search(r"<response>(.*?)</response>", message, flags=re.DOTALL)
-            if match:
-                message = match.group(1)
-
-        # Check max length
-        if len(message) > self.max_length:
-            logger.warning(f"Max length exceeded: {len(message)} > {self.max_length}")
-            retry_result = self.retry_prompt()
-            if retry_result is not None:
-                return retry_result
-
-        # ALWAYS strip thinking tags from message history
-        # Heroku's OpenAI-compatible API causes 500 errors if <reasoning> tags are in history
-        # Raw response (with thinking) is preserved in _last_raw_response for user access
-        self.add_message("assistant", message)
-
-        # Invoke callback for final assistant message (no tool calls)
-        if self.on_assistant_message:
-            try:
-                self.on_assistant_message(message.strip(), False)
-            except Exception as callback_error:
-                logger.warning(
-                    f"on_assistant_message callback raised an exception: {callback_error}"
-                )
-
-        # Handle structured output
-        if self.require_response_format:
-            if self.waf_config.debug_mode:
-                logger.debug(f"Attempting to parse as {self.response_format.__name__}")
-                logger.debug(f"Message to parse: {message}")
-
-            # Check for truncated JSON before attempting extraction
-            if lm_json_utils.is_truncated_json(message):
-                logger.warning(
-                    f"Detected truncated JSON response (likely max_completion_tokens too low). "
-                    f"Response ends with: ...{message[-100:]}"
-                )
-                raise TruncatedResponseError(
-                    "Response appears truncated - JSON is incomplete. "
-                    "Consider increasing max_completion_tokens.",
-                    raw_response=message,
-                )
-
-            json_message = lm_json_utils.extract_strict_json(message)
-
-            if self.waf_config.debug_mode:
-                logger.debug(f"Extracted JSON: {json_message}")
-
-            if not json_message:
-                logger.warning(
-                    f"Failed to extract JSON from response. "
-                    f"Response was: {message[:500]}..."
-                )
-                if self.allow_response_format_fallback:
-                    logger.warning(
-                        "Structured output parsing failed; returning raw text because "
-                        "allow_response_format_fallback=True"
-                    )
-                    logger.warning(f"Returning raw message: {message}")
-                    return message
-                # Return empty model with defaults rather than failing
-                try:
-                    default_model = self.response_format()
-                    return self._unwrap_thinking_response(default_model)
-                except Exception as e:
-                    logger.error(f"Failed to create default model: {e}")
-                    raise ValueError(
-                        f"Could not extract valid JSON from LLM response. "
-                        f"Raw response: {message[:200]}..."
-                    )
-
-            try:
-                parsed = self.response_format.model_validate_json(json_message)
-            except Exception as parse_error:
-                if self.allow_response_format_fallback:
-                    logger.warning(
-                        "Structured output validation failed; returning raw text because "
-                        "allow_response_format_fallback=True: %s",
-                        parse_error,
-                    )
-                    return message
-                raise
-            return self._unwrap_thinking_response(parsed)
-
-        return message
+        return self._finalize_response(full_response)
 
     def _detect_tool_loop(self, tool_calls: List[Any]) -> bool:
         """
@@ -3009,10 +2953,7 @@ class LLM:
                         "Extended thinking validation error in streaming after tool execution. "
                         "Switching to pseudo-thinking mode."
                     )
-                    # Disable native extended thinking and enable pseudo-thinking
-                    self.extended_thinking = None
-                    self._thinking_auto_disabled = True
-                    self._use_pseudo_thinking = True
+                    self._fallback_to_pseudo_thinking()
 
                     # Get new params without extended_thinking
                     # Note: pseudo-thinking instruction will be injected in _validate_messages_for_api
@@ -3025,20 +2966,8 @@ class LLM:
                 else:
                     raise
             except PermissionDeniedError as e:
-                context = "_handle_tool_calls streaming"
                 if self._is_cloudfront_403(e):
-                    self.waf_metrics.cloudfront_403_errors += 1
-                    detected_blockers = self._log_waf_blocked_content(
-                        self.messages, context
-                    )
-                    self.waf_metrics.failed_requests += 1
-                    raise CloudFrontWAFError(
-                        message=f"CloudFront WAF blocked request in {context}",
-                        messages=self.messages.copy(),
-                        detected_blockers=detected_blockers,
-                        context=context,
-                        original_error=e,
-                    ) from e
+                    self._raise_waf_error(e, "_handle_tool_calls streaming")
                 self.waf_metrics.failed_requests += 1
                 raise
 
@@ -3137,20 +3066,10 @@ class LLM:
                             raise
 
                     except PermissionDeniedError as e:
-                        context = "_handle_tool_calls recursive fallback"
                         if self._is_cloudfront_403(e):
-                            self.waf_metrics.cloudfront_403_errors += 1
-                            detected_blockers = self._log_waf_blocked_content(
-                                self.messages, context
+                            self._raise_waf_error(
+                                e, "_handle_tool_calls recursive fallback"
                             )
-                            self.waf_metrics.failed_requests += 1
-                            raise CloudFrontWAFError(
-                                message=f"CloudFront WAF blocked request in {context}",
-                                messages=self.messages.copy(),
-                                detected_blockers=detected_blockers,
-                                context=context,
-                                original_error=e,
-                            ) from e
                         self.waf_metrics.failed_requests += 1
                         raise
                     return self._handle_tool_calls(
@@ -3353,11 +3272,8 @@ class LLM:
                         "Extended thinking validation error after tool execution. "
                         "Switching to pseudo-thinking mode."
                     )
-                    # Disable native extended thinking and enable pseudo-thinking
                     original_extended_thinking = self.extended_thinking
-                    self.extended_thinking = None
-                    self._thinking_auto_disabled = True
-                    self._use_pseudo_thinking = True
+                    self._fallback_to_pseudo_thinking()
 
                     try:
                         # Get new params without extended_thinking
@@ -3383,20 +3299,8 @@ class LLM:
 
                 # Handle 403 CloudFront WAF Error
                 elif e.status_code == 403:
-                    context = "_handle_tool_calls non-streaming"
                     if self._is_cloudfront_403(e):
-                        self.waf_metrics.cloudfront_403_errors += 1
-                        detected_blockers = self._log_waf_blocked_content(
-                            self.messages, context
-                        )
-                        self.waf_metrics.failed_requests += 1
-                        raise CloudFrontWAFError(
-                            message=f"CloudFront WAF blocked request in {context}",
-                            messages=self.messages.copy(),
-                            detected_blockers=detected_blockers,
-                            context=context,
-                            original_error=e,
-                        ) from e
+                        self._raise_waf_error(e, "_handle_tool_calls non-streaming")
                     self.waf_metrics.failed_requests += 1
                     raise e
 
@@ -3555,6 +3459,29 @@ class LLM:
                     validated_msg["tool_calls"] = self._sanitize_tool_calls(
                         tool_calls, i
                     )
+                # Gemini 3+: inject dummy thought_signature if missing.
+                # Google AI requires thought_signature on the first functionCall
+                # in each step of the current turn. If callers (e.g. streaming
+                # consumers) didn't capture extra_content from deltas, inject the
+                # documented dummy value to skip validation rather than 400-ing.
+                # See: https://ai.google.dev/gemini-api/docs/thought-signatures#faqs
+                if self._provider == "google":
+                    tcs = validated_msg.get("tool_calls")
+                    if tcs and isinstance(tcs, list) and len(tcs) > 0:
+                        first_tc = tcs[0]
+                        if (
+                            isinstance(first_tc, dict)
+                            and "extra_content" not in first_tc
+                        ):
+                            first_tc["extra_content"] = {
+                                "google": {
+                                    "thought_signature": "skip_thought_signature_validator"
+                                }
+                            }
+                            logger.debug(
+                                "Injected dummy thought_signature for Google AI tool call at message %d",
+                                i,
+                            )
                 validated_messages.append(validated_msg)
                 continue
 
