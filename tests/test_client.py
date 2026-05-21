@@ -9,6 +9,9 @@ from pydantic import BaseModel
 from floship_llm.client import LLM
 from floship_llm.schemas import ThinkingModel, ToolFunction, ToolParameter
 
+HEROKU_URL = "https://us.inference.heroku.com/v1"
+GOOGLE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
 
 def create_mock_stream_response(content: str):
     """Create a mock streaming response that yields chunks.
@@ -170,6 +173,34 @@ class TestLLM:
             ):
                 LLM(type="invalid")
 
+    def test_detect_provider(self):
+        """Test provider detection from base URL."""
+        assert LLM._detect_provider(HEROKU_URL) == "heroku"
+        assert LLM._detect_provider("https://eu.inference.heroku.com/v1") == "heroku"
+        assert LLM._detect_provider(GOOGLE_URL) == "google"
+        assert LLM._detect_provider("https://api.example.com") == "other"
+        assert LLM._detect_provider("") == "other"
+
+    def test_init_google_provider_auto_disables_waf(self):
+        """Test that Google AI provider auto-disables WAF sanitization."""
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ,
+            {"INFERENCE_URL": GOOGLE_URL},
+        ):
+            llm = LLM()
+            assert llm._provider == "google"
+            assert llm.waf_config.enable_waf_sanitization is False
+
+    def test_init_google_provider_explicit_waf_override(self):
+        """Test that explicit enable_waf_sanitization overrides auto-disable for Google."""
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ,
+            {"INFERENCE_URL": GOOGLE_URL},
+        ):
+            llm = LLM(enable_waf_sanitization=True)
+            assert llm._provider == "google"
+            assert llm.waf_config.enable_waf_sanitization is True
+
     def test_init_embedding_type_supported(self):
         """Test LLM initialization with embedding type is now supported."""
         with patch("floship_llm.client.OpenAI"):
@@ -307,7 +338,9 @@ class TestLLM:
 
     def test_get_request_params_with_heroku_parameters(self):
         """Test request parameters with Heroku-specific parameters."""
-        with patch("floship_llm.client.OpenAI"):
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ, {"INFERENCE_URL": HEROKU_URL}
+        ):
             llm = LLM(temperature=0.7, max_completion_tokens=2000, top_k=50, top_p=0.9)
             params = llm.get_request_params()
 
@@ -322,7 +355,9 @@ class TestLLM:
 
     def test_get_request_params_with_extended_thinking(self):
         """Test request parameters with extended thinking for Claude."""
-        with patch("floship_llm.client.OpenAI"):
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ, {"INFERENCE_URL": HEROKU_URL}
+        ):
             extended_thinking_config = {
                 "enabled": True,
                 "budget_tokens": 1024,
@@ -340,6 +375,45 @@ class TestLLM:
             }
             assert params == expected
 
+    def test_get_request_params_google_provider(self):
+        """Test request parameters with Google AI provider."""
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ,
+            {"INFERENCE_URL": GOOGLE_URL},
+        ):
+            llm = LLM(temperature=0.7, top_p=0.9)
+            params = llm.get_request_params()
+
+            # Google: top_p is a standard param, not wrapped in extra_body
+            expected = {
+                "model": "test-model",
+                "top_p": 0.9,
+            }
+            assert params == expected
+
+            # WAF sanitization should be auto-disabled for Google
+            assert llm.waf_config.enable_waf_sanitization is False
+
+    def test_get_request_params_google_ignores_extended_thinking(self):
+        """Test that extended_thinking is ignored for Google AI provider."""
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ,
+            {"INFERENCE_URL": GOOGLE_URL},
+        ):
+            extended_thinking_config = {
+                "enabled": True,
+                "budget_tokens": 1024,
+            }
+            llm = LLM(temperature=0.7, extended_thinking=extended_thinking_config)
+            params = llm.get_request_params()
+
+            # Google doesn't support extended_thinking; should use normal temperature
+            expected = {
+                "model": "test-model",
+                "temperature": 0.7,
+            }
+            assert params == expected
+
     def test_get_request_params_auto_disables_thinking_with_tool_history(self):
         """Test that extended_thinking is auto-disabled when conversation has tool call history.
 
@@ -348,7 +422,9 @@ class TestLLM:
         thinking blocks), we must auto-disable thinking for follow-up requests
         after tool execution to avoid 400 errors.
         """
-        with patch("floship_llm.client.OpenAI"):
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ, {"INFERENCE_URL": HEROKU_URL}
+        ):
             extended_thinking_config = {
                 "enabled": True,
                 "budget_tokens": 1024,
@@ -384,7 +460,9 @@ class TestLLM:
 
     def test_get_request_params_keeps_thinking_without_tool_history(self):
         """Test that extended_thinking stays enabled when no tool calls in history."""
-        with patch("floship_llm.client.OpenAI"):
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ, {"INFERENCE_URL": HEROKU_URL}
+        ):
             extended_thinking_config = {
                 "enabled": True,
                 "budget_tokens": 1024,
@@ -410,7 +488,9 @@ class TestLLM:
 
     def test_reset_restores_extended_thinking_if_auto_disabled(self):
         """Test that reset() restores extended_thinking when it was auto-disabled."""
-        with patch("floship_llm.client.OpenAI"):
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ, {"INFERENCE_URL": HEROKU_URL}
+        ):
             extended_thinking_config = {
                 "enabled": True,
                 "budget_tokens": 1024,
@@ -451,7 +531,9 @@ class TestLLM:
 
     def test_can_use_extended_thinking_fresh_conversation(self):
         """Test can_use_extended_thinking returns True for fresh conversation."""
-        with patch("floship_llm.client.OpenAI"):
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ, {"INFERENCE_URL": HEROKU_URL}
+        ):
             llm = LLM(extended_thinking={"enabled": True, "budget_tokens": 1024})
 
             # Fresh conversation - should be True
@@ -459,7 +541,9 @@ class TestLLM:
 
     def test_can_use_extended_thinking_after_tool_calls(self):
         """Test can_use_extended_thinking returns False after tool execution."""
-        with patch("floship_llm.client.OpenAI"):
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ, {"INFERENCE_URL": HEROKU_URL}
+        ):
             llm = LLM(extended_thinking={"enabled": True, "budget_tokens": 1024})
 
             # Add tool call history

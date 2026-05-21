@@ -577,6 +577,13 @@ class LLM:
 
         self.client = OpenAI(api_key=self.api_key, base_url=self.base_url)
 
+        # Auto-detect provider from base URL
+        self._provider = self._detect_provider(self.base_url)
+
+        # Auto-disable WAF sanitization for non-Heroku providers (no CloudFront)
+        if self._provider != "heroku" and "enable_waf_sanitization" not in kwargs:
+            self.waf_config.enable_waf_sanitization = False
+
         # Model configuration
         self.model = kwargs.get("model", os.environ["INFERENCE_MODEL_ID"])
         self.temperature = kwargs.get("temperature", 0.15)
@@ -716,6 +723,24 @@ class LLM:
         """
         return self._last_native_reasoning
 
+    @staticmethod
+    def _detect_provider(base_url: str) -> str:
+        """Detect the inference provider from the base URL.
+
+        Returns:
+            'google' for Google AI (generativelanguage.googleapis.com)
+            'heroku' for Heroku Inference API
+            'other' for unknown providers
+        """
+        if not base_url:
+            return "other"
+        url_lower = base_url.lower()
+        if "generativelanguage.googleapis.com" in url_lower:
+            return "google"
+        if "inference.heroku.com" in url_lower:
+            return "heroku"
+        return "other"
+
     def _validate_environment(self):
         """Validate required environment variables."""
         required_vars = ["INFERENCE_URL", "INFERENCE_MODEL_ID", "INFERENCE_KEY"]
@@ -765,6 +790,9 @@ class LLM:
         """
         Check if error is a CloudFront WAF 403 error (content blocked).
 
+        Only applies to Heroku provider (which uses CloudFront).
+        Google AI and other providers don't use CloudFront WAF.
+
         This distinguishes between:
         - CloudFront WAF blocks: Generic "forbidden" from content filtering
         - Authorization errors: "you do not have access to that model" (API key permissions)
@@ -775,6 +803,10 @@ class LLM:
         Returns:
             True if error is CloudFront WAF 403 (not an authorization error)
         """
+        # Only Heroku uses CloudFront WAF
+        if self._provider != "heroku":
+            return False
+
         if not isinstance(error, PermissionDeniedError):
             return False
 
@@ -1644,9 +1676,10 @@ class LLM:
 
     def get_request_params(self) -> Dict[str, Any]:
         """
-        Build parameters for completion request according to Heroku Inference API spec.
+        Build parameters for completion request.
 
-        See: https://devcenter.heroku.com/articles/heroku-inference-api-v1-chat-completions
+        Supports Heroku Inference API and Google AI (Gemini) via OpenAI-compatible endpoints.
+        Provider-specific parameters are adjusted automatically based on the base URL.
 
         Note: Claude models don't allow both temperature and top_p simultaneously.
         Note: When extended_thinking is enabled, temperature must be set to 1.
@@ -1656,16 +1689,20 @@ class LLM:
             "model": self.model,
         }
 
-        # Heroku-specific parameters that need to go in extra_body for OpenAI client
+        # Provider-specific parameters that need to go in extra_body for OpenAI client
         extra_body = {}
 
-        # Check if extended thinking is enabled
-        has_extended_thinking = self.extended_thinking is not None and (
-            (
-                isinstance(self.extended_thinking, dict)
-                and self.extended_thinking.get("enabled", False)
+        # Check if extended thinking is enabled (Heroku/Claude only)
+        has_extended_thinking = (
+            self._provider == "heroku"
+            and self.extended_thinking is not None
+            and (
+                (
+                    isinstance(self.extended_thinking, dict)
+                    and self.extended_thinking.get("enabled", False)
+                )
+                or (isinstance(self.extended_thinking, bool) and self.extended_thinking)
             )
-            or (isinstance(self.extended_thinking, bool) and self.extended_thinking)
         )
 
         # Auto-disable extended thinking if conversation has tool call history
@@ -1684,20 +1721,23 @@ class LLM:
             # Extended thinking requires temperature = 1
             params["temperature"] = 1.0
         elif self.top_p is not None:
-            # If top_p is set, use it instead of temperature
-            extra_body["top_p"] = self.top_p
+            # Google supports top_p as a standard param; Heroku uses extra_body
+            if self._provider == "google":
+                params["top_p"] = self.top_p
+            else:
+                extra_body["top_p"] = self.top_p
         else:
             # Otherwise use temperature
             params["temperature"] = self.temperature
 
-        # Add Heroku-supported optional parameters
+        # Add supported optional parameters
         if self.max_completion_tokens is not None:
             params["max_completion_tokens"] = self.max_completion_tokens
 
         if self.top_k is not None:
             extra_body["top_k"] = self.top_k
 
-        # Only add extended_thinking if it should be enabled (not auto-disabled)
+        # Only add extended_thinking if it should be enabled (Heroku/Claude only)
         if has_extended_thinking and self.extended_thinking is not None:
             extra_body["extended_thinking"] = self.extended_thinking
 
@@ -2728,19 +2768,30 @@ class LLM:
         )
 
         # Build assistant message with tool calls
+        tool_call_dicts = []
+        for tc in message.tool_calls:
+            tc_dict = {
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments,
+                },
+            }
+            # Preserve extra_content (e.g. Google Gemini thought signatures)
+            # Required by Gemini 3+ for tool call validation
+            extra_content = getattr(tc, "extra_content", None)
+            if extra_content is not None:
+                tc_dict["extra_content"] = (
+                    extra_content.model_dump()
+                    if hasattr(extra_content, "model_dump")
+                    else extra_content
+                )
+            tool_call_dicts.append(tc_dict)
+
         assistant_message = {
             "role": "assistant",
-            "tool_calls": [
-                {
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {
-                        "name": tc.function.name,
-                        "arguments": tc.function.arguments,
-                    },
-                }
-                for tc in message.tool_calls
-            ],
+            "tool_calls": tool_call_dicts,
         }
 
         # Handle content - preserve LLM's response text if it exists

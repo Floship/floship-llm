@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-05-21
+
+### Added
+- **Google AI (Gemini) provider support:** Auto-detect provider from `INFERENCE_URL` and adjust behavior accordingly. Supports `generativelanguage.googleapis.com` endpoints via OpenAI-compatible API.
+- **Provider detection:** New `_detect_provider()` classifies endpoints as `google`, `heroku`, or `other` based on base URL.
+- **Gemini thought signature preservation:** Tool call messages now preserve `extra_content` (including `thought_signature`) required by Gemini 3+ models for multi-step tool calling.
+- **Auto-disable WAF for non-Heroku:** CloudFront WAF sanitization is automatically disabled for Google AI and other non-Heroku providers (can be overridden with `enable_waf_sanitization=True`).
+
+### Changed
+- **Provider-aware request params:** `extended_thinking` is only sent for Heroku/Claude; `top_p` is a standard param for Google (not wrapped in `extra_body`).
+- **CloudFront 403 detection:** `_is_cloudfront_403()` returns `False` immediately for non-Heroku providers.
+
 ## [0.5.54] - 2026-05-14
 
 ### Added

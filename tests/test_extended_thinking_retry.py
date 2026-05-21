@@ -18,8 +18,8 @@ class TestExtendedThinkingRetry:
     def test_extended_thinking_retry_on_400(self):
         """Test that LLM retries without extended thinking when API returns 400 validation error."""
 
-        # Set environment variables
-        os.environ["INFERENCE_URL"] = "https://api.example.com"
+        # Set environment variables (use Heroku URL for extended_thinking support)
+        os.environ["INFERENCE_URL"] = "https://us.inference.heroku.com/v1"
         os.environ["INFERENCE_MODEL_ID"] = "test-model"
         os.environ["INFERENCE_KEY"] = "test-key"
 

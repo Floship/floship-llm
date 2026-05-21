@@ -627,7 +627,7 @@ class TestLLMWAFIntegration:
     @pytest.fixture
     def mock_env(self, monkeypatch):
         """Mock environment variables."""
-        monkeypatch.setenv("INFERENCE_URL", "https://test.inference.com")
+        monkeypatch.setenv("INFERENCE_URL", "https://us.inference.heroku.com/v1")
         monkeypatch.setenv("INFERENCE_MODEL_ID", "test-model")
         monkeypatch.setenv("INFERENCE_KEY", "test-key")
 

@@ -8,6 +8,8 @@ import pytest
 from floship_llm import LLM
 from floship_llm.schemas import ToolFunction
 
+HEROKU_URL = "https://us.inference.heroku.com/v1"
+
 
 class TestToolSanitization:
     """Tests for tool response sanitization."""
@@ -271,7 +273,9 @@ class TestCloudFrontCompatibility:
         the API returns a 403 with "you do not have access to that model".
         This should NOT be retried as a WAF block - it should fail immediately.
         """
-        with patch("floship_llm.client.OpenAI"):
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ, {"INFERENCE_URL": HEROKU_URL}
+        ):
             from openai import PermissionDeniedError
 
             llm = LLM()
@@ -297,7 +301,9 @@ class TestCloudFrontCompatibility:
 
     def test_403_api_key_error_not_treated_as_waf(self):
         """Test that 403 API key errors are NOT treated as WAF blocks."""
-        with patch("floship_llm.client.OpenAI"):
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ, {"INFERENCE_URL": HEROKU_URL}
+        ):
             from openai import PermissionDeniedError
 
             llm = LLM()
@@ -319,7 +325,9 @@ class TestCloudFrontCompatibility:
 
     def test_403_generic_forbidden_treated_as_waf(self):
         """Test that generic 403 forbidden IS treated as WAF block."""
-        with patch("floship_llm.client.OpenAI"):
+        with patch("floship_llm.client.OpenAI"), patch.dict(
+            os.environ, {"INFERENCE_URL": HEROKU_URL}
+        ):
             from openai import PermissionDeniedError
 
             llm = LLM()
