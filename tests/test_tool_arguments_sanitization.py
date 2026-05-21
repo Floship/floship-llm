@@ -625,3 +625,136 @@ class TestIntegrationWithHandleToolCalls:
             assistant_msg["tool_calls"][0]["function"]["arguments"]
             == '{"param": "value"}'
         )
+
+
+class TestConcatenatedJsonSplitting:
+    """Test suite for splitting concatenated JSON tool calls from Gemini."""
+
+    @pytest.fixture
+    def llm(self):
+        """Create an LLM instance for testing."""
+        with patch.dict(
+            "os.environ",
+            {
+                "INFERENCE_URL": "https://api.example.com/v1",
+                "INFERENCE_MODEL_ID": "test-model",
+                "INFERENCE_KEY": "test-key",
+            },
+        ):
+            return LLM()
+
+    def test_try_split_concatenated_json_two_objects(self, llm):
+        """Two concatenated JSON objects should be split."""
+        raw = '{"a": 1}{"b": 2}'
+        result = llm._try_split_concatenated_json(raw)
+        assert result == [{"a": 1}, {"b": 2}]
+
+    def test_try_split_concatenated_json_single_object(self, llm):
+        """Single valid JSON should return None (not a concatenation)."""
+        raw = '{"a": 1}'
+        result = llm._try_split_concatenated_json(raw)
+        assert result is None
+
+    def test_try_split_concatenated_json_invalid(self, llm):
+        """Truly invalid JSON should return None."""
+        raw = "not json at all"
+        result = llm._try_split_concatenated_json(raw)
+        assert result is None
+
+    def test_try_split_concatenated_json_empty(self, llm):
+        """Empty string should return None."""
+        result = llm._try_split_concatenated_json("")
+        assert result is None
+
+    def test_try_split_concatenated_json_with_whitespace(self, llm):
+        """Concatenated objects with whitespace between them should split."""
+        raw = '{"a": 1}  {"b": 2}  {"c": 3}'
+        result = llm._try_split_concatenated_json(raw)
+        assert result == [{"a": 1}, {"b": 2}, {"c": 3}]
+
+    def test_try_split_non_dict(self, llm):
+        """Array values should return None."""
+        raw = "[1, 2][3, 4]"
+        result = llm._try_split_concatenated_json(raw)
+        assert result is None
+
+    def test_sanitize_splits_concatenated_gemini_tool_calls(self, llm):
+        """Concatenated Gemini tool calls should be split into separate tool calls."""
+        concat_args = (
+            '{"tool_name":"get_order","arguments":"{\\"id\\": 10746630}"}'
+            '{"tool_name":"get_order_history","arguments":"{\\"id\\": 10746630}"}'
+        )
+        tool_calls = [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                    "name": "get_order",
+                    "arguments": concat_args,
+                },
+            }
+        ]
+        result = llm._sanitize_tool_calls(tool_calls, msg_index=0)
+        assert len(result) == 2
+        assert result[0]["function"]["name"] == "get_order"
+        assert result[0]["function"]["arguments"] == '{"id": 10746630}'
+        assert result[1]["function"]["name"] == "get_order_history"
+        assert result[1]["function"]["arguments"] == '{"id": 10746630}'
+        assert result[1]["id"] == "call_1_split_1"
+
+    def test_sanitize_splits_flat_concatenated_args(self, llm):
+        """Flat concatenated arg objects (no tool_name) use parent's name."""
+        concat_args = '{"id": 123}{"name": "test"}'
+        tool_calls = [
+            {
+                "id": "call_2",
+                "type": "function",
+                "function": {
+                    "name": "my_tool",
+                    "arguments": concat_args,
+                },
+            }
+        ]
+        result = llm._sanitize_tool_calls(tool_calls, msg_index=0)
+        assert len(result) == 2
+        assert result[0]["function"]["arguments"] == '{"id": 123}'
+        assert result[1]["function"]["arguments"] == '{"name": "test"}'
+        # Flat objects have no tool_name, so parent name is used
+        assert result[1]["function"]["name"] == "my_tool"
+
+    def test_sanitize_still_replaces_truly_invalid_json(self, llm):
+        """Single invalid JSON (not concatenation) still gets replaced with '{}'."""
+        tool_calls = [
+            {
+                "id": "call_3",
+                "type": "function",
+                "function": {
+                    "name": "my_tool",
+                    "arguments": "not valid json",
+                },
+            }
+        ]
+        result = llm._sanitize_tool_calls(tool_calls, msg_index=0)
+        assert len(result) == 1
+        assert result[0]["function"]["arguments"] == "{}"
+
+    def test_sanitize_three_concatenated_calls(self, llm):
+        """Three concatenated objects should all be recovered."""
+        concat_args = '{"a": 1}{"b": 2}{"c": 3}'
+        tool_calls = [
+            {
+                "id": "call_4",
+                "type": "function",
+                "function": {
+                    "name": "tool_a",
+                    "arguments": concat_args,
+                },
+            }
+        ]
+        result = llm._sanitize_tool_calls(tool_calls, msg_index=0)
+        assert len(result) == 3
+        assert result[0]["function"]["arguments"] == '{"a": 1}'
+        assert result[1]["function"]["arguments"] == '{"b": 2}'
+        assert result[1]["id"] == "call_4_split_1"
+        assert result[2]["function"]["arguments"] == '{"c": 3}'
+        assert result[2]["id"] == "call_4_split_2"

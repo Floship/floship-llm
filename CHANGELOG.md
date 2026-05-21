@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-05-21
+
+### Fixed
+- **Concatenated JSON tool call recovery:** Gemini sometimes emits multiple tool calls as concatenated JSON objects in a single `arguments` field (e.g. `{...}{...}`). `_sanitize_tool_calls` now splits them via `raw_decode` and promotes each to a separate tool call, preventing empty `"{}"` args and wasted tool rounds.
+
 ## [0.7.1] - 2026-05-21
 
 ### Fixed

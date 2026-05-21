@@ -3618,6 +3618,9 @@ class LLM:
             safe_name, _ = self._sanitize_tool_name_for_api(name)
             func["name"] = safe_name
 
+            # Collect any extra tool calls split from concatenated JSON
+            split_extras = []
+
             # Validate and sanitize arguments to prevent 500 errors
             # The API returns 500 "Failed to execute chat" for invalid JSON in arguments
             args = func.get("arguments")
@@ -3641,15 +3644,55 @@ class LLM:
                             # Re-serialize to ensure clean JSON (removes trailing commas, etc.)
                             func["arguments"] = json.dumps(parsed)
                     except json.JSONDecodeError as e:
-                        # Log detailed error context for debugging 500 errors
-                        args_preview = str(args)[:200] if args else "<empty>"
-                        logger.warning(
-                            f"Invalid JSON in tool call arguments at message {msg_index} "
-                            f"index {tc_index}: {e}. Using empty object. "
-                            f"Tool name: {name}. Args preview: {args_preview!r}"
-                        )
-                        # Replace invalid JSON with empty object to prevent 500 error
-                        func["arguments"] = "{}"
+                        # Gemini sometimes concatenates multiple tool calls into one
+                        # e.g. '{"tool_name":"a","arguments":"..."}{"tool_name":"b","arguments":"..."}'
+                        split_calls = self._try_split_concatenated_json(args)
+                        if split_calls and len(split_calls) > 1:
+                            logger.info(
+                                f"Recovered {len(split_calls)} concatenated tool calls "
+                                f"at message {msg_index} index {tc_index}. "
+                                f"Tool name: {name}. Args preview: {str(args)[:200]!r}"
+                            )
+                            # Use the first object's args for this tool call
+                            first = split_calls[0]
+                            if "arguments" in first:
+                                # Nested: each split object has tool_name + arguments
+                                func["arguments"] = first.get("arguments", "{}")
+                                if isinstance(func["arguments"], dict):
+                                    func["arguments"] = json.dumps(func["arguments"])
+                            else:
+                                func["arguments"] = json.dumps(first)
+
+                            # Promote remaining objects as additional tool calls
+                            for extra_idx, extra_obj in enumerate(split_calls[1:], 1):
+                                extra_name = extra_obj.get("tool_name", name)
+                                if "arguments" in extra_obj:
+                                    extra_args = extra_obj["arguments"]
+                                    if isinstance(extra_args, dict):
+                                        extra_args = json.dumps(extra_args)
+                                else:
+                                    extra_args = json.dumps(extra_obj)
+                                extra_tc = {
+                                    "id": f"{tc.get('id', 'call')}_split_{extra_idx}",
+                                    "type": "function",
+                                    "function": {
+                                        "name": extra_name,
+                                        "arguments": extra_args,
+                                    },
+                                }
+                                split_extras.append(extra_tc)
+                                logger.info(
+                                    f"Promoted split tool call: {extra_name} "
+                                    f"(from message {msg_index} index {tc_index})"
+                                )
+                        else:
+                            args_preview = str(args)[:200] if args else "<empty>"
+                            logger.warning(
+                                f"Invalid JSON in tool call arguments at message {msg_index} "
+                                f"index {tc_index}: {e}. Using empty object. "
+                                f"Tool name: {name}. Args preview: {args_preview!r}"
+                            )
+                            func["arguments"] = "{}"
 
                     # Sanitize arguments for WAF if enabled
                     if self.waf_config.enable_waf_sanitization:
@@ -3684,8 +3727,40 @@ class LLM:
 
             sanitized_tc["function"] = func
             sanitized_tool_calls.append(sanitized_tc)
+            # Append any extra tool calls split from concatenated JSON
+            sanitized_tool_calls.extend(split_extras)
 
         return sanitized_tool_calls
+
+    def _try_split_concatenated_json(self, raw: str) -> Optional[List[dict]]:
+        """
+        Try to split concatenated JSON objects like '{}{}' into a list.
+        Returns list of parsed dicts if successful, None otherwise.
+        """
+        if not raw or not raw.strip().startswith("{"):
+            return None
+
+        objects = []
+        decoder = json.JSONDecoder()
+        idx = 0
+        raw = raw.strip()
+
+        try:
+            while idx < len(raw):
+                # Skip whitespace
+                while idx < len(raw) and raw[idx] in " \t\n\r":
+                    idx += 1
+                if idx >= len(raw):
+                    break
+                obj, end_idx = decoder.raw_decode(raw, idx)
+                if not isinstance(obj, dict):
+                    return None
+                objects.append(obj)
+                idx = end_idx
+        except json.JSONDecodeError:
+            return None
+
+        return objects if len(objects) > 1 else None
 
     # ========== Tool Management (Delegated) ==========
 
