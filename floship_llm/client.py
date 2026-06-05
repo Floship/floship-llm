@@ -868,6 +868,7 @@ class LLM:
             'google' for Google AI (generativelanguage.googleapis.com)
             'heroku' for Heroku Inference API
             'vertex' for Google Cloud Vertex AI
+            'openrouter' for OpenRouter (openrouter.ai)
             'openai_compatible' for unknown/generic OpenAI-compatible providers
         """
         if not base_url:
@@ -877,6 +878,8 @@ class LLM:
             return "vertex"
         if "generativelanguage.googleapis.com" in url_lower:
             return "google"
+        if "openrouter.ai" in url_lower:
+            return "openrouter"
         if "inference.heroku.com" in url_lower:
             return "heroku"
         return "openai_compatible"
@@ -1204,6 +1207,98 @@ class LLM:
             else:
                 sanitized_parts.append(part)
         return sanitized_parts
+
+    def _adapt_multimodal_for_provider(self, content: list) -> list:
+        """Adapt multimodal content parts for the current provider.
+
+        Adapts non-standard content part types to ones the provider understands.
+        Standard OpenAI types (``text``, ``image_url``, ``input_audio``) are
+        always passed through -- the API will return a clear error if the
+        specific model doesn't support a modality.
+
+        Content part types handled:
+        - ``text``: preserved everywhere
+        - ``image_url``: preserved everywhere (standard OpenAI spec)
+        - ``input_audio``: preserved everywhere (standard OpenAI spec;
+          supported by audio-capable models on OpenRouter, OpenAI, Gemini)
+        - ``video_url``: converted to ``image_url`` for OpenRouter/generic
+          (providers normalise media URLs for multimodal models like
+          xiaomi/mimo-v2.5); preserved as-is for Gemini native backend
+        - ``video_data``: converted to ``image_url`` data URI for
+          OpenRouter/generic; preserved for Gemini native backend
+
+        Args:
+            content: List of content parts (OpenAI multimodal format).
+
+        Returns:
+            Adapted list of content parts for the current provider.
+        """
+        # Gemini: pass everything through unchanged (native backend handles
+        # audio/video conversion to Gemini Part objects).
+        if self._provider in ("google", "vertex"):
+            return content
+
+        adapted: list = []
+        for part in content:
+            if not isinstance(part, dict):
+                adapted.append(part)
+                continue
+
+            part_type = part.get("type")
+
+            if part_type == "video_url":
+                # Custom type: convert video_url to image_url for
+                # OpenRouter/generic providers.  OpenRouter normalises
+                # media URLs for models that support video
+                # (e.g. xiaomi/mimo-v2.5, Gemini via OpenRouter).
+                video_info = part.get("video_url", {})
+                url = video_info.get("url", "")
+                if url:
+                    logger.debug(
+                        "Converting video_url to image_url for provider '%s'",
+                        self._provider,
+                    )
+                    adapted.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": url},
+                        }
+                    )
+                else:
+                    logger.warning(
+                        "video_url part has no url; skipping for provider '%s'",
+                        self._provider,
+                    )
+
+            elif part_type == "video_data":
+                # Custom type: convert base64 video data to image_url data URI.
+                video_info = part.get("video_data", {})
+                data = video_info.get("data", "")
+                mime = video_info.get("mime_type", "video/mp4")
+                if data:
+                    logger.debug(
+                        "Converting video_data to image_url data URI for provider '%s'",
+                        self._provider,
+                    )
+                    adapted.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime};base64,{data}"},
+                        }
+                    )
+                else:
+                    logger.warning(
+                        "video_data part has no data; skipping for provider '%s'",
+                        self._provider,
+                    )
+
+            else:
+                # Standard OpenAI types (text, image_url, input_audio) pass
+                # through unchanged.  If the model doesn't support a modality
+                # the API will return a clear error rather than silent failure.
+                adapted.append(part)
+
+        return adapted
 
     def _is_cloudfront_403(self, error: Exception) -> bool:
         """
@@ -2168,8 +2263,9 @@ class LLM:
             # Extended thinking requires temperature = 1
             params["temperature"] = 1.0
         elif self.top_p is not None:
-            # Google supports top_p as a standard param; Heroku uses extra_body
-            if self._provider == "google":
+            # Google and OpenRouter support top_p as a standard param;
+            # Heroku uses extra_body
+            if self._provider in ("google", "openrouter"):
                 params["top_p"] = self.top_p
             else:
                 extra_body["top_p"] = self.top_p
@@ -2225,8 +2321,8 @@ class LLM:
             "model": self.model,
         }
 
-        # Google AI doesn't support Heroku-specific embedding params
-        if self._provider == "google":
+        # Google AI and OpenRouter don't support Heroku-specific embedding params
+        if self._provider in ("google", "openrouter"):
             return params
 
         # Add optional parameters if specified (Heroku/other providers)
@@ -3120,9 +3216,22 @@ class LLM:
             except (TypeError, AttributeError):
                 pass  # Mock object, skip tool handling
 
+        # Get the content, falling back to reasoning from model_extra
+        # when the model outputs reasoning but leaves content empty
+        # (common with reasoning models like MiMo on OpenRouter)
+        content = choice.message.content
+        if not content and hasattr(choice.message, "model_extra"):
+            reasoning = (choice.message.model_extra or {}).get("reasoning")
+            if reasoning and isinstance(reasoning, str):
+                content = reasoning
+                logger.debug(
+                    "Falling back to model_extra['reasoning'] for content "
+                    "(reasoning model put response in reasoning field)"
+                )
+
         # Handle regular message
         return self._finalize_response(
-            choice.message.content.strip() if choice.message.content else "",
+            content.strip() if content else "",
             response_obj=response,
         )
 
@@ -4034,6 +4143,10 @@ class LLM:
 
             # Multimodal content (list of parts) -- preserve as-is
             if isinstance(validated_msg["content"], list):
+                # Adapt multimodal parts for the current provider
+                validated_msg["content"] = self._adapt_multimodal_for_provider(
+                    validated_msg["content"]
+                )
                 # WAF-sanitize text parts only
                 if self.waf_config.enable_waf_sanitization:
                     validated_msg["content"] = self._sanitize_multimodal_for_waf(

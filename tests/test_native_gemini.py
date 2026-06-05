@@ -967,3 +967,189 @@ class TestLLMNativeGeminiIntegration:
 
             collected = list(llm.prompt_stream("Hi"))
             assert "".join(collected) == "ABC"
+
+
+class TestMultimodalConversion:
+    """Tests for audio/video content part conversion in native Gemini backend."""
+
+    @pytest.fixture
+    def backend(self):
+        with patch("floship_llm.backends.native_gemini._require_genai") as mock_req:
+            from google.genai import types
+
+            mock_genai = Mock()
+            mock_req.return_value = (mock_genai, types)
+            b = NativeGeminiBackend(api_key="k", model="m")
+        return b
+
+    def test_input_audio_converted_to_bytes(self, backend):
+        """input_audio parts should be converted to Part.from_bytes with audio MIME type."""
+        import base64
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Transcribe this."},
+                    {
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": base64.b64encode(b"RIFF...wavdata").decode(),
+                            "format": "wav",
+                        },
+                    },
+                ],
+            }
+        ]
+        contents, _ = backend._to_gemini_contents(messages)
+        assert len(contents) == 1
+        parts = contents[0].parts
+        assert len(parts) == 2
+        # First part is text
+        assert parts[0].text == "Transcribe this."
+        # Second part is audio bytes
+        assert parts[1].inline_data.mime_type == "audio/wav"
+        assert parts[1].inline_data.data == b"RIFF...wavdata"
+
+    def test_input_audio_mp3_mime_type(self, backend):
+        """mp3 format should map to audio/mpeg MIME type."""
+        import base64
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": base64.b64encode(b"mp3data").decode(),
+                            "format": "mp3",
+                        },
+                    },
+                ],
+            }
+        ]
+        contents, _ = backend._to_gemini_contents(messages)
+        parts = contents[0].parts
+        assert parts[0].inline_data.mime_type == "audio/mpeg"
+
+    def test_video_url_converted_to_part(self, backend):
+        """video_url parts should be converted to Part.from_uri for HTTP URLs."""
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this video."},
+                    {
+                        "type": "video_url",
+                        "video_url": {"url": "https://example.com/clip.mp4"},
+                    },
+                ],
+            }
+        ]
+        contents, _ = backend._to_gemini_contents(messages)
+        parts = contents[0].parts
+        assert len(parts) == 2
+        assert parts[0].text == "Describe this video."
+        assert parts[1].file_data.file_uri == "https://example.com/clip.mp4"
+        assert parts[1].file_data.mime_type == "video/mp4"
+
+    def test_video_url_data_uri_converted_to_bytes(self, backend):
+        """video_url with data URI should be converted to Part.from_bytes."""
+        import base64
+
+        video_b64 = base64.b64encode(b"fake-video-data").decode()
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "video_url",
+                        "video_url": {"url": f"data:video/webm;base64,{video_b64}"},
+                    },
+                ],
+            }
+        ]
+        contents, _ = backend._to_gemini_contents(messages)
+        parts = contents[0].parts
+        assert parts[0].inline_data.mime_type == "video/webm"
+        assert parts[0].inline_data.data == b"fake-video-data"
+
+    def test_video_data_converted_to_bytes(self, backend):
+        """video_data parts should be converted to Part.from_bytes."""
+        import base64
+
+        video_b64 = base64.b64encode(b"fake-video-data").decode()
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "video_data",
+                        "video_data": {
+                            "data": video_b64,
+                            "mime_type": "video/webm",
+                        },
+                    },
+                ],
+            }
+        ]
+        contents, _ = backend._to_gemini_contents(messages)
+        parts = contents[0].parts
+        assert parts[0].inline_data.mime_type == "video/webm"
+        assert parts[0].inline_data.data == b"fake-video-data"
+
+    def test_video_data_default_mime_type(self, backend):
+        """video_data without mime_type should default to video/mp4."""
+        import base64
+
+        video_b64 = base64.b64encode(b"data").decode()
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "video_data",
+                        "video_data": {"data": video_b64},
+                    },
+                ],
+            }
+        ]
+        contents, _ = backend._to_gemini_contents(messages)
+        parts = contents[0].parts
+        assert parts[0].inline_data.mime_type == "video/mp4"
+
+    def test_mixed_multimodal_parts(self, backend):
+        """Full multimodal content with text, image, audio, and video."""
+        import base64
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Analyze everything."},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/img.jpg"},
+                    },
+                    {
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": base64.b64encode(b"audio").decode(),
+                            "format": "wav",
+                        },
+                    },
+                    {
+                        "type": "video_url",
+                        "video_url": {"url": "https://example.com/vid.mp4"},
+                    },
+                ],
+            }
+        ]
+        contents, _ = backend._to_gemini_contents(messages)
+        parts = contents[0].parts
+        assert len(parts) == 4
+        assert parts[0].text == "Analyze everything."
+        assert parts[1].file_data.file_uri == "https://example.com/img.jpg"  # image
+        assert parts[2].inline_data.mime_type == "audio/wav"  # audio
+        assert parts[3].file_data.file_uri == "https://example.com/vid.mp4"  # video

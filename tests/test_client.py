@@ -179,6 +179,7 @@ class TestLLM:
         assert LLM._detect_provider(HEROKU_URL) == "heroku"
         assert LLM._detect_provider("https://eu.inference.heroku.com/v1") == "heroku"
         assert LLM._detect_provider(GOOGLE_URL) == "google"
+        assert LLM._detect_provider("https://openrouter.ai/api/v1") == "openrouter"
         assert LLM._detect_provider("https://api.example.com") == "openai_compatible"
         assert LLM._detect_provider("") == "openai_compatible"
         assert (
@@ -951,6 +952,64 @@ class TestLLM:
             assert result == "Final response"
             # Message history also has clean content
             assert llm.messages[-1]["content"] == "Final response"
+
+    def test_process_response_falls_back_to_model_extra_reasoning(self):
+        """Test that process_response falls back to model_extra['reasoning']
+        when content is None (reasoning models like MiMo on OpenRouter)."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+
+            mock_choice = Mock()
+            mock_choice.message.content = None
+            mock_choice.message.model_extra = {
+                "reasoning": "The audio contains a continuous beep tone."
+            }
+            mock_response = Mock()
+            mock_response.choices = [mock_choice]
+
+            result = llm.process_response(mock_response)
+
+            assert result == "The audio contains a continuous beep tone."
+            assert len(llm.messages) == 1
+            assert llm.messages[0]["role"] == "assistant"
+            assert (
+                llm.messages[0]["content"]
+                == "The audio contains a continuous beep tone."
+            )
+
+    def test_process_response_model_extra_reasoning_with_empty_content(self):
+        """Test that empty-string content also triggers model_extra fallback."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+
+            mock_choice = Mock()
+            mock_choice.message.content = ""
+            mock_choice.message.model_extra = {
+                "reasoning": "Transcription result here."
+            }
+            mock_response = Mock()
+            mock_response.choices = [mock_choice]
+
+            result = llm.process_response(mock_response)
+
+            assert result == "Transcription result here."
+
+    def test_process_response_content_takes_precedence_over_reasoning(self):
+        """Test that non-empty content takes precedence over model_extra reasoning."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+
+            mock_choice = Mock()
+            mock_choice.message.content = "Direct content response."
+            mock_choice.message.model_extra = {
+                "reasoning": "Some reasoning in model_extra."
+            }
+            mock_response = Mock()
+            mock_response.choices = [mock_choice]
+
+            result = llm.process_response(mock_response)
+
+            assert result == "Direct content response."
 
     def test_extended_thinking_strips_thinking_tags_from_history(self):
         """Test that thinking tags are ALWAYS stripped from message history.

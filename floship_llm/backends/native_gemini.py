@@ -434,6 +434,12 @@ class NativeGeminiBackend(ProviderBackend):
                             parts.append(types.Part.from_text(text=text))
                     elif item_type == "image_url":
                         parts.append(self._convert_image_part(item))
+                    elif item_type == "input_audio":
+                        parts.append(self._convert_audio_part(item))
+                    elif item_type == "video_url":
+                        parts.append(self._convert_video_url_part(item))
+                    elif item_type == "video_data":
+                        parts.append(self._convert_video_data_part(item))
 
             # Tool calls in assistant messages -> function_call parts
             tool_calls = msg.get("tool_calls")
@@ -482,6 +488,69 @@ class NativeGeminiBackend(ProviderBackend):
             return types.Part.from_bytes(data=base64.b64decode(b64data), mime_type=mime)
         else:
             return types.Part.from_uri(file_uri=url, mime_type="image/jpeg")
+
+    def _convert_audio_part(self, item: dict[str, Any]) -> Any:
+        """Convert an OpenAI input_audio content part to a Gemini Part.
+
+        Accepts the ``input_audio`` format used by the OpenAI audio API::
+
+            {"type": "input_audio", "input_audio": {"data": "<base64>", "format": "wav"}}
+
+        The audio data is sent as inline bytes with the appropriate MIME type.
+        """
+        import base64
+
+        types = self._types
+        audio_info = item.get("input_audio", {})
+        data = audio_info.get("data", "")
+        fmt = audio_info.get("format", "wav")
+        mime_map = {
+            "wav": "audio/wav",
+            "mp3": "audio/mpeg",
+            "ogg": "audio/ogg",
+            "flac": "audio/flac",
+            "webm": "audio/webm",
+            "m4a": "audio/mp4",
+        }
+        mime_type = mime_map.get(fmt, f"audio/{fmt}")
+        return types.Part.from_bytes(data=base64.b64decode(data), mime_type=mime_type)
+
+    def _convert_video_url_part(self, item: dict[str, Any]) -> Any:
+        """Convert a video_url content part to a Gemini Part.
+
+        Accepts::
+
+            {"type": "video_url", "video_url": {"url": "https://..."}}
+
+        or a data-URI::
+
+            {"type": "video_url", "video_url": {"url": "data:video/mp4;base64,..."}}
+        """
+        import base64
+
+        types = self._types
+        url = item.get("video_url", {}).get("url", "")
+        if url.startswith("data:"):
+            header, b64data = url.split(",", 1)
+            mime = header.split(";")[0].split(":")[1] if ":" in header else "video/mp4"
+            return types.Part.from_bytes(data=base64.b64decode(b64data), mime_type=mime)
+        else:
+            return types.Part.from_uri(file_uri=url, mime_type="video/mp4")
+
+    def _convert_video_data_part(self, item: dict[str, Any]) -> Any:
+        """Convert a video_data content part to a Gemini Part.
+
+        Accepts::
+
+            {"type": "video_data", "video_data": {"data": "<base64>", "mime_type": "video/mp4"}}
+        """
+        import base64
+
+        types = self._types
+        video_info = item.get("video_data", {})
+        data = video_info.get("data", "")
+        mime = video_info.get("mime_type", "video/mp4")
+        return types.Part.from_bytes(data=base64.b64decode(data), mime_type=mime)
 
     # -- Config building ----------------------------------------------------
 

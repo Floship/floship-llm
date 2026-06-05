@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-06-05
+
+### Fixed
+- **Reasoning model fallback:** `process_response()` now falls back to `model_extra['reasoning']` when `message.content` is None or empty. This fixes a bug where reasoning models on OpenRouter (like `xiaomi/mimo-v2.5`) would put their transcription/response in the `reasoning` field instead of `content`, causing `prompt()` to return an empty string while direct API calls worked fine.
+
+### Added
+- 3 new tests for reasoning model fallback in `process_response()`.
+
+## [1.6.0] - 2026-06-05
+
+### Added
+- **Audio input support:** `input_audio` content parts (base64-encoded WAV/MP3/OGG/etc.) are now passed through to all providers as standard OpenAI content parts. For Gemini native backend, they are converted to `Part.from_bytes` with the correct MIME type. For OpenRouter and other OpenAI-compatible providers, they are passed through unchanged -- audio-capable models (like `openai/gpt-4o-audio-preview` or audio-capable open models) will process them; non-audio models will return a clear API error.
+- **Video input support:** New `video_url` and `video_data` content part types for video input. `video_url` accepts HTTP URLs or data URIs; `video_data` accepts raw base64-encoded video with a MIME type. For Gemini native backend, these convert to `Part.from_uri` or `Part.from_bytes`. For OpenRouter/generic providers, they are converted to `image_url` parts for passthrough (OpenRouter normalizes media URLs for multimodal models like xiaomi/mimo-v2.5).
+- **16 new tests** for native Gemini audio/video conversion in `tests/test_native_gemini.py` and video adaptation tests in `tests/test_openrouter.py`.
+
+### Changed
+- **`_adapt_multimodal_for_provider`** no longer strips `input_audio` parts for non-Gemini providers. Audio is an OpenAI standard content type supported by audio-capable models on OpenRouter and other providers. The API returns a clear error if a model doesn't support audio input.
+- **Native Gemini backend** now converts `input_audio`, `video_url`, and `video_data` content parts to native Gemini `Part` objects.
+
+## [1.5.0] - 2026-06-05
+
+### Added
+- **OpenRouter provider support:** First-class `openrouter` provider detection from `openrouter.ai` URLs. Routing, parameter handling (standard `top_p`, no Heroku extras), and embedding params are all handled correctly for OpenRouter.
+- **Multimodal audio adaptation:** `input_audio` content parts (Gemini-only) are automatically stripped and replaced with a text placeholder for non-Gemini providers (OpenRouter, Heroku, generic). Prevents `400 Multimodal data corrupted` errors when switching between providers. Images (`image_url`) are preserved for all providers.
+- **28 new tests** in `tests/test_openrouter.py` covering provider detection, init, request params, audio adaptation, validation pipeline, and cross-provider comparison.
+
+### Fixed
+- **`top_p` routing for OpenRouter:** `top_p` is now sent as a standard parameter (not `extra_body`) for OpenRouter and Google providers, matching the OpenAI API spec.
+
 ## [1.4.3] - 2025-07-22
 
 ### Fixed
