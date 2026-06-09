@@ -2147,8 +2147,9 @@ class LLM:
                         for chunk in stream:
                             if chunk.choices and len(chunk.choices) > 0:
                                 delta = chunk.choices[0].delta
-                                if delta.content:
-                                    full_response += delta.content
+                                delta_text = self._get_stream_delta_text(delta)
+                                if delta_text:
+                                    full_response += delta_text
                         return full_response
 
                     full_response = self.retry_handler.execute_with_retry(
@@ -2356,8 +2357,8 @@ class LLM:
                 for chunk in stream:
                     if chunk.choices and len(chunk.choices) > 0:
                         delta = chunk.choices[0].delta
-                        if delta.content:
-                            content = delta.content
+                        content = self._get_stream_delta_text(delta)
+                        if content:
                             full_response += content
                             yield content
 
@@ -2695,6 +2696,24 @@ class LLM:
             Processed response text or structured output (Pydantic model instance)
         """
         return self._finalize_response(full_response)
+
+    def _get_stream_delta_text(self, delta) -> str:
+        """Extract visible response text from a streaming delta."""
+        content = getattr(delta, "content", None)
+        if content:
+            return content
+
+        reasoning = getattr(delta, "reasoning", None)
+        if reasoning and isinstance(reasoning, str):
+            return reasoning
+
+        model_extra = getattr(delta, "model_extra", None) or {}
+        if isinstance(model_extra, dict):
+            reasoning = model_extra.get("reasoning")
+            if reasoning and isinstance(reasoning, str):
+                return reasoning
+
+        return ""
 
     def _detect_tool_loop(self, tool_calls: List[Any]) -> bool:
         """
@@ -3167,16 +3186,17 @@ class LLM:
                     full_response = ""
 
                     # Yield the first chunk we already got
-                    if first_delta.content:
-                        full_response += first_delta.content
-                        yield first_delta.content
+                    first_content = self._get_stream_delta_text(first_delta)
+                    if first_content:
+                        full_response += first_content
+                        yield first_content
 
                     # Yield remaining chunks
                     for chunk in stream:
                         if chunk.choices and len(chunk.choices) > 0:
                             delta = chunk.choices[0].delta
-                            if delta.content:
-                                content = delta.content
+                            content = self._get_stream_delta_text(delta)
+                            if content:
                                 full_response += content
                                 yield content
 

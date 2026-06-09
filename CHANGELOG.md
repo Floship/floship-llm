@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.8] - 2026-06-09
+
+### Fixed
+- **Streaming reasoning response fallback:** Streaming responses now collect text from `delta.reasoning` and `delta.model_extra["reasoning"]` when `delta.content` is empty. This fixes empty structured responses from reasoning models in the default streaming path.
+
 ## [0.7.7] - 2026-06-09
 
 ### Fixed
