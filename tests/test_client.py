@@ -947,6 +947,41 @@ class TestLLM:
             # Message history also has clean content
             assert llm.messages[-1]["content"] == "Final response"
 
+    def test_process_response_falls_back_to_model_extra_reasoning(self):
+        """Fallback to model_extra['reasoning'] when content is None."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+
+            mock_choice = Mock()
+            mock_choice.message.content = None
+            mock_choice.message.model_extra = {
+                "reasoning": '{"summary": "Recovered summary"}',
+            }
+            mock_response = Mock()
+            mock_response.choices = [mock_choice]
+
+            result = llm.process_response(mock_response)
+
+            assert result == '{"summary": "Recovered summary"}'
+            assert llm.messages[0]["content"] == '{"summary": "Recovered summary"}'
+
+    def test_process_response_model_extra_reasoning_with_empty_content(self):
+        """Fallback to model_extra['reasoning'] when content is empty string."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM()
+
+            mock_choice = Mock()
+            mock_choice.message.content = ""
+            mock_choice.message.model_extra = {
+                "reasoning": '{"summary": "Recovered summary"}',
+            }
+            mock_response = Mock()
+            mock_response.choices = [mock_choice]
+
+            result = llm.process_response(mock_response)
+
+            assert result == '{"summary": "Recovered summary"}'
+
     def test_extended_thinking_strips_thinking_tags_from_history(self):
         """Test that thinking tags are ALWAYS stripped from message history.
 

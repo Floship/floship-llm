@@ -2664,9 +2664,21 @@ class LLM:
             except (TypeError, AttributeError):
                 pass  # Mock object, skip tool handling
 
+        # Some reasoning models put their final answer in model_extra["reasoning"]
+        # while leaving message.content empty.
+        content = choice.message.content
+        if not content and hasattr(choice.message, "model_extra"):
+            reasoning = (choice.message.model_extra or {}).get("reasoning")
+            if reasoning and isinstance(reasoning, str):
+                content = reasoning
+                logger.debug(
+                    "Falling back to model_extra['reasoning'] for content "
+                    "(reasoning model put response in reasoning field)"
+                )
+
         # Handle regular message
         return self._finalize_response(
-            choice.message.content.strip() if choice.message.content else "",
+            content.strip() if content else "",
             response_obj=response,
         )
 

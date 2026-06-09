@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.7] - 2026-06-09
+
+### Fixed
+- **Reasoning response fallback:** `process_response()` now falls back to `model_extra["reasoning"]` when `message.content` is empty. This recovers structured responses from reasoning models that place their answer in the reasoning field.
+
 ## [0.7.6] - 2026-06-09
 
 ### Fixed
