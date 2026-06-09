@@ -230,8 +230,11 @@ class JSONUtils:
         open_brackets = text.count("[")
         close_brackets = text.count("]")
 
-        # If unbalanced, likely truncated
-        if open_braces != close_braces or open_brackets != close_brackets:
+        # If opening delimiters outnumber closing delimiters, the response likely
+        # ended before the JSON object/array was complete. Extra closing delimiters
+        # are malformed output, but not truncation; extraction can often recover the
+        # first balanced JSON object from that response.
+        if open_braces > close_braces or open_brackets > close_brackets:
             return True
 
         # Check for common truncation patterns

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-06-09
+
+### Fixed
+- **Structured JSON truncation detection:** Extra closing delimiters after an otherwise valid JSON object are no longer misclassified as truncation. The parser now recovers the first balanced JSON object instead of retrying with higher `max_completion_tokens`.
+
 ## [0.7.5] - 2026-05-21
 
 ### Added
