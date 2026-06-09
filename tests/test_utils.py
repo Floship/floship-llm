@@ -747,6 +747,20 @@ Done."""
         assert utils.is_truncated_json('{"outer": {"inner": "value"}') is True
         assert utils.is_truncated_json('{"key": "value"}') is False
 
+    def test_is_truncated_json_extra_closing_brace_not_truncation(self):
+        """Extra closing delimiters are malformed, but not truncated."""
+        utils = JSONUtils()
+
+        assert utils.is_truncated_json('{"key": "value"}\n}') is False
+
+    def test_extract_strict_json_recovers_before_extra_closing_brace(self):
+        """Recover valid JSON when the model appends an extra closing brace."""
+        utils = JSONUtils()
+
+        result = utils.extract_strict_json('{"summary": "ok"}\n}')
+
+        assert result == '{\n  "summary": "ok"\n}'
+
     def test_is_truncated_json_unbalanced_brackets(self):
         """Test is_truncated_json detects unbalanced brackets."""
         utils = JSONUtils()

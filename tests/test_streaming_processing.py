@@ -94,6 +94,17 @@ class TestStreamingProcessing:
         assert result.name == "test"
         assert result.value == 123
 
+    def test_process_streaming_response_structured_extra_closing_brace(self, llm):
+        """Recover structured output when JSON has a trailing extra brace."""
+        llm.response_format = ResponseModelForTesting
+        response = '{"name": "test", "value": 123}\n}'
+
+        result = llm._process_streaming_response(response)
+
+        assert isinstance(result, ResponseModelForTesting)
+        assert result.name == "test"
+        assert result.value == 123
+
     def test_process_streaming_response_truncated_json(self, llm):
         """Test detection of truncated JSON."""
         llm.response_format = ResponseModelForTesting
