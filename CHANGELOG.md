@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Structured JSON truncation detection:** Extra closing delimiters after an otherwise valid JSON object are no longer misclassified as truncation. The parser now recovers the first balanced JSON object instead of retrying with higher `max_completion_tokens`.
+- **Streaming reasoning response fallback:** Streaming responses now collect text from `delta.reasoning` and `delta.model_extra["reasoning"]` when `delta.content` is empty. This fixes empty structured responses from reasoning models in the default streaming path.
 
 ## [1.6.1] - 2026-06-05
 

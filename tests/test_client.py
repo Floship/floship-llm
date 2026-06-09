@@ -35,6 +35,21 @@ def create_mock_stream_response(content: str):
     return chunks
 
 
+def create_mock_reasoning_stream_response(content: str):
+    """Create a mock stream where chunks use model_extra['reasoning']."""
+    chunks = []
+    for char in content:
+        mock_chunk = Mock()
+        mock_delta = Mock()
+        mock_delta.content = None
+        mock_delta.model_extra = {"reasoning": char}
+        mock_choice = Mock()
+        mock_choice.delta = mock_delta
+        mock_chunk.choices = [mock_choice]
+        chunks.append(mock_chunk)
+    return chunks
+
+
 class ResponseModelForTesting(BaseModel):
     """Test pydantic model for response format testing."""
 
@@ -779,6 +794,23 @@ class TestLLM:
                 assert result.value == 42
                 # No reasoning captured since not wrapped
                 assert llm.get_last_reasoning() is None
+
+    def test_prompt_with_response_format_reasoning_stream(self):
+        """Structured output parses when stream chunks put text in reasoning."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            plain_response = '{"name": "test", "value": 42}'
+            mock_openai.return_value.chat.completions.create.return_value = (
+                create_mock_reasoning_stream_response(plain_response)
+            )
+
+            llm = LLM(response_format=ResponseModelForTesting)
+            llm.messages = []
+
+            result = llm.prompt("Hello")
+
+            assert isinstance(result, ResponseModelForTesting)
+            assert result.name == "test"
+            assert result.value == 42
 
     def test_prompt_with_response_format_and_extended_thinking(self):
         """Test prompt with response format + extended_thinking returns user's original model type (wrapped)."""
