@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.3] - 2026-06-16
+
+### Added
+- **OpenRouter reasoning controls:** `LLM` now accepts `reasoning`, `include_reasoning`, and `max_tokens` kwargs. For OpenRouter providers, reasoning options are sent through `extra_body` so the OpenAI SDK includes them in the request body, and `max_tokens` is preferred over `max_completion_tokens` when supplied.
+
 ## [1.6.2] - 2026-06-10
 
 ### Fixed

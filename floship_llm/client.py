@@ -493,10 +493,13 @@ class LLM:
             model: Model ID (defaults to INFERENCE_MODEL_ID env var)
             temperature: Sampling temperature, 0.0-1.0 (default: 0.15)
             max_completion_tokens: Maximum tokens to generate (default: None)
+            max_tokens: OpenAI/OpenRouter max output tokens alias (default: None)
             top_k: Sample from top K options (default: None)
             top_p: Nucleus sampling threshold, 0.0-1.0 (default: None)
             extended_thinking: Enable extended thinking for Claude models (default: None)
                 Example: {"enabled": True, "budget_tokens": 1024, "include_reasoning": True}
+            reasoning: OpenRouter reasoning config, e.g. {"effort": "xhigh"} (default: None)
+            include_reasoning: OpenRouter legacy include_reasoning flag (default: None)
             allow_ignored_params: Allow unsupported parameters without error (default: False)
             response_format: Pydantic model for structured output
             continuous: Keep conversation history (default: True)
@@ -721,9 +724,12 @@ class LLM:
 
         # Heroku-specific parameters (for completions)
         self.max_completion_tokens = kwargs.get("max_completion_tokens")
+        self.max_tokens = kwargs.get("max_tokens")
         self.top_k = kwargs.get("top_k")
         self.top_p = kwargs.get("top_p")
         self.extended_thinking = kwargs.get("extended_thinking")
+        self.reasoning = kwargs.get("reasoning")
+        self.include_reasoning = kwargs.get("include_reasoning")
         self.allow_ignored_params = kwargs.get("allow_ignored_params", False)
 
         # Heroku-specific parameters (for embeddings)
@@ -2274,7 +2280,9 @@ class LLM:
             params["temperature"] = self.temperature
 
         # Add supported optional parameters
-        if self.max_completion_tokens is not None:
+        if self._provider == "openrouter" and self.max_tokens is not None:
+            params["max_tokens"] = self.max_tokens
+        elif self.max_completion_tokens is not None:
             params["max_completion_tokens"] = self.max_completion_tokens
 
         if self.top_k is not None and self._provider == "heroku":
@@ -2283,6 +2291,12 @@ class LLM:
         # Only add extended_thinking if it should be enabled (Heroku/Claude only)
         if has_extended_thinking and self.extended_thinking is not None:
             extra_body["extended_thinking"] = self.extended_thinking
+
+        if self._provider == "openrouter":
+            if self.reasoning is not None:
+                extra_body["reasoning"] = self.reasoning
+            if self.include_reasoning is not None:
+                extra_body["include_reasoning"] = self.include_reasoning
 
         # Google context cache: inject cached_content into extra_body
         cache_ref = self._active_cache_ref

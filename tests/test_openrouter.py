@@ -145,6 +145,44 @@ class TestOpenRouterRequestParams:
 
             assert params["max_completion_tokens"] == 500
 
+    def test_max_tokens_preferred_when_supplied(self):
+        """OpenRouter should send max_tokens when callers use the OpenRouter alias."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(max_completion_tokens=500, max_tokens=1000)
+            params = llm.get_request_params()
+
+            assert params["max_tokens"] == 1000
+            assert "max_completion_tokens" not in params
+
+    def test_reasoning_sent_in_extra_body(self):
+        """OpenRouter reasoning config should be sent through extra_body."""
+        reasoning = {"effort": "xhigh", "exclude": False}
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(reasoning=reasoning)
+            params = llm.get_request_params()
+
+            assert params["extra_body"]["reasoning"] == reasoning
+
+    def test_include_reasoning_sent_in_extra_body(self):
+        """OpenRouter legacy include_reasoning flag should be sent through extra_body."""
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(include_reasoning=True)
+            params = llm.get_request_params()
+
+            assert params["extra_body"]["include_reasoning"] is True
+
+    def test_reasoning_merges_with_other_extra_body(self):
+        """OpenRouter reasoning should coexist with other provider extra_body keys."""
+        reasoning = {"effort": "xhigh", "exclude": False}
+        with patch("floship_llm.client.OpenAI"):
+            llm = LLM(reasoning=reasoning, include_reasoning=True)
+            params = llm.get_request_params()
+
+            assert params["extra_body"] == {
+                "reasoning": reasoning,
+                "include_reasoning": True,
+            }
+
     def test_top_k_not_in_extra_body_for_openrouter(self):
         """top_k is Heroku-only; should not be in extra_body for OpenRouter."""
         with patch("floship_llm.client.OpenAI"):
