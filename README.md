@@ -11,6 +11,7 @@ Python library for Heroku Managed Inference API and OpenAI-compatible endpoints.
 - 🧠 Extended thinking for Claude models
 - 🔄 Continuous conversations and retry mechanisms
 - 📐 Embeddings support
+- ⚡ System One (TypeSafe Jev) decisions: typed answers, no prose to parse
 - 🌐 Native Gemini SDK backend (optional)
 - ☁️ Vertex AI support with ADC auth
 - 💾 Google context caching (cost optimization)
@@ -161,6 +162,73 @@ response = llm.embed("Sample", return_full_response=True)
 doc_llm = LLM(type='embedding', input_type='search_document')
 query_llm = LLM(type='embedding', input_type='search_query')
 ```
+
+## System One (TypeSafe Jev)
+
+Jev is a judgment model, not a chat model.  It reads one state, answers every
+question in parallel, and returns a typed value per question, so nothing is
+parsed out of prose.  Reach for it where code needs a decision: routing,
+scoring on a rubric, or checking whether a statement is true of a record.
+
+Three primitives are available: `Noul` (a yes/no question, answered with a
+probability), `Choice` (one option from a set, with a probability per option
+and a confidence), and `Score` (an ordered scale you describe in levels).
+All three travel in one request, so a question that only some branches need
+costs little to include.
+
+```python
+from floship_llm import Choice, LLM, Noul, Score
+
+llm = LLM(model="typesafe/jev-1.13")
+
+response = llm.decisions(
+    state={"ticket": "Checkout shows a blank screen after I click Pay."},
+    questions={
+        "is_bug": Noul("Is the customer reporting a software defect?"),
+        "team": Choice(
+            instructions="Which team should own this ticket?",
+            criteria={
+                "payments": "Checkout, billing, or payment processing",
+                "frontend": "Rendering, layout, or browser compatibility",
+            },
+        ),
+        "urgency": Score(
+            instructions="How urgent is this ticket?",
+            criteria=[
+                "Can wait for the next release",
+                "Should be fixed this week",
+                "Blocking revenue right now",
+            ],
+        ),
+    },
+)
+
+response.answers["is_bug"].noul      # 0.96, a probability
+response.answers["team"].choice      # 'payments'
+response.answers["urgency"].score    # 1.99, a probability-weighted mean
+```
+
+**Keep policy in your code.** The answer says what; the confidence says whether
+to act.  Set a floor below which no action runs, and a threshold per action that
+rises with the cost of a wrong call.
+
+```python
+answer = response.answers["urgency"]
+
+if answer.confidence < 0.6:
+    route_to_human(ticket_id)
+elif answer.score > 1.5:
+    escalate(ticket_id)
+```
+
+**Notes**
+
+- The decisions route is not under the OpenAI-compatible `/api/v1` prefix.
+  `SystemOneBackend` derives the endpoint from the base URL's scheme and host.
+- A model blocked by an OpenRouter workspace guardrail is reported as HTTP 404,
+  with the guardrail URL in the message.  Read the `SystemOneError` text
+  rather than assuming the model is missing.
+- `decisions()` raises `ValueError` on an empty state or no questions.
 
 ## Tool Calling
 

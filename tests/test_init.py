@@ -31,12 +31,12 @@ class TestModuleImports:
     def test_version_is_string(self):
         """Test that __version__ is a string."""
         assert isinstance(__version__, str)
-        assert __version__ == "1.6.3"
+        assert __version__ == "1.7.0"
 
     def test_version_accessible_from_module(self):
         """Test that version is accessible from the main module."""
         assert hasattr(floship_llm, "__version__")
-        assert floship_llm.__version__ == "1.6.3"
+        assert floship_llm.__version__ == "1.7.0"
 
     def test_all_exports_defined(self):
         """Test that __all__ is properly defined."""
@@ -68,6 +68,15 @@ class TestModuleImports:
             "EmbeddingResponse",
             "EmbeddingUsage",
             "GoogleCacheManager",
+            "Noul",
+            "NoulAnswer",
+            "Choice",
+            "ChoiceAnswer",
+            "Score",
+            "ScoreAnswer",
+            "DecisionsResponse",
+            "SystemOneBackend",
+            "SystemOneError",
         ]
 
         assert set(__all__) == set(expected_exports)

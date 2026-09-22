@@ -732,6 +732,12 @@ class LLM:
         self.include_reasoning = kwargs.get("include_reasoning")
         self.allow_ignored_params = kwargs.get("allow_ignored_params", False)
 
+        # System One (TypeSafe Jev).  The backend is created on first use, so a
+        # chat-only caller never builds a decisions transport.
+        self._systemone_backend = None
+        self.decisions_endpoint = kwargs.get("decisions_endpoint")
+        self.decisions_timeout = kwargs.get("decisions_timeout", 120.0)
+
         # Heroku-specific parameters (for embeddings)
         self.input_type = kwargs.get(
             "input_type"
@@ -2512,6 +2518,101 @@ class LLM:
             self._log_provider_error_context(e)
             raise
             raise
+
+    # ========== System One (TypeSafe Jev) ==========
+
+    def decisions(
+        self,
+        state: Any,
+        questions: Dict[str, Any],
+        *,
+        model: Optional[str] = None,
+        session_id: Optional[str] = None,
+        return_full_response: bool = False,
+    ) -> Any:
+        """Ask System One (TypeSafe Jev) questions about one state.
+
+        Jev is a judgment model: it answers every question in parallel against
+        the same state and returns a typed value per question, so nothing is
+        parsed out of prose.  Ask every question the code might need, including
+        questions that matter on only some branches, because they travel in one
+        request.
+
+        Args:
+            state: the content to judge: a string, or a JSON object or array of
+                related context.  Send only the fields the questions need.
+            questions: question name to a Noul, Choice, or Score, or to a
+                mapping already in the wire format.
+            model: model id; defaults to this client's model.
+            session_id: optional identifier grouping related requests.
+            return_full_response: return the raw response mapping instead of a
+                DecisionsResponse.
+
+        Returns:
+            A DecisionsResponse with one typed answer per question, or the raw
+            response mapping when return_full_response is True.
+
+        Raises:
+            ValueError: if state or questions is empty.
+            SystemOneError: if the endpoint rejects the request.  A model
+                blocked by an OpenRouter workspace guardrail is reported as
+                HTTP 404, with the guardrail URL in the message.
+
+        Example:
+            >>> from floship_llm import Choice, LLM, Noul
+            >>> llm = LLM(model="typesafe/jev-1.13")
+            >>> response = llm.decisions(
+            ...     state={"ticket": "Checkout shows a blank screen."},
+            ...     questions={
+            ...         "is_bug": Noul("Is the customer reporting a defect?"),
+            ...         "team": Choice(
+            ...             instructions="Which team should own this ticket?",
+            ...             criteria={
+            ...                 "payments": "Checkout, billing, or payments",
+            ...                 "frontend": "Rendering or layout",
+            ...             },
+            ...         ),
+            ...     },
+            ... )
+            >>> response.answers["is_bug"].noul
+            0.96
+
+            Gate the action on the answer, keeping the threshold in your code:
+
+            >>> if response.answers["is_bug"].noul > 0.8:
+            ...     route_to_engineering()
+        """
+        if not state:
+            raise ValueError("State cannot be empty for a decisions request.")
+        if not questions:
+            raise ValueError("At least one question is required.")
+        response = self._get_systemone_backend().decide(
+            state=state,
+            questions=questions,
+            model=model,
+            session_id=session_id,
+        )
+        return response.raw if return_full_response else response
+
+    def _get_systemone_backend(self) -> Any:
+        """Return the System One backend, creating it on first use."""
+        if self._systemone_backend is None:
+            from .backends.systemone import SystemOneBackend
+
+            self._systemone_backend = SystemOneBackend(
+                api_key=self.api_key,
+                model=self.model,
+                base_url=self.base_url,
+                endpoint=self.decisions_endpoint,
+                timeout=self.decisions_timeout,
+            )
+        return self._systemone_backend
+
+    def close_systemone(self) -> None:
+        """Close the System One HTTP client, if one was opened."""
+        if self._systemone_backend is not None:
+            self._systemone_backend.close()
+            self._systemone_backend = None
 
     def prompt(
         self,

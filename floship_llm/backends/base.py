@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import Any, Mapping, Optional
 
 
 class ProviderBackend(ABC):
@@ -26,6 +26,25 @@ class ProviderBackend(ABC):
     @abstractmethod
     def embed(self, **kwargs: Any) -> Any:
         """Send an embedding request.  Returns the raw SDK response."""
+
+    def decide(
+        self,
+        *,
+        state: Any,
+        questions: Mapping[str, Any],
+        model: Optional[str] = None,
+        session_id: Optional[str] = None,
+    ) -> Any:
+        """Send a System One (decisions) request.
+
+        Returns a 'DecisionsResponse'.  The default implementation raises
+        'NotImplementedError'; only backends that speak a decisions protocol
+        override this.  System One is not part of the OpenAI wire protocol, so
+        most backends never implement it.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support System One decisions"
+        )
 
     @property
     @abstractmethod

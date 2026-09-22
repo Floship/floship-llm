@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-09-22
+
+### Added
+- **System One (TypeSafe Jev) support:** `LLM.decisions()` asks typed questions of a judgment model and returns typed answers, so calling code branches on a value instead of parsing prose.  Every question travels in one request and is evaluated in parallel against the same state.  New primitives `Noul`, `Choice` and `Score` serialise to the wire format; answers come back as `NoulAnswer`, `ChoiceAnswer` and `ScoreAnswer` inside a `DecisionsResponse` that also carries the model, provider, id and usage.  An answer of an unrecognised type degrades to its raw mapping instead of raising.
+- **`SystemOneBackend`:** posts to the decisions route.  That path is NOT under the OpenAI-compatible `/api/v1` prefix, so the endpoint is derived from the base URL's scheme and host.  Retries the statuses the API documents as transient with exponential backoff, and raises `SystemOneError` carrying the server's own message, status, error code and body.  `chat()` and `embed()` raise `NotImplementedError`, because System One is not a chat backend.
+- `LLM` accepts `decisions_endpoint` and `decisions_timeout`, and exposes `close_systemone()` to release the HTTP client it created.
+- `httpx` is now a direct dependency.  It already arrived with `openai`; declaring it makes the transport explicit.
+- 66 tests in `tests/test_systemone.py`, using the response examples published in OpenRouter's API reference.
+
+### Notes
+- A model blocked by an OpenRouter workspace guardrail is reported as HTTP 404 with the guardrail URL in the message, so the error text is the thing to read.
+
 ## [1.6.3] - 2026-06-16
 
 ### Added
