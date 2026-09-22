@@ -38,10 +38,16 @@ from floship_llm import (
     SystemOneError,
 )
 from floship_llm.backends.openai_compat import OpenAICompatibleBackend
-from floship_llm.backends.systemone import decisions_url, question_to_wire
+from floship_llm.backends.systemone import (
+    TYPESAFE_BASE_URL,
+    TYPESAFE_DECISIONS_PATH,
+    decisions_url,
+    question_to_wire,
+)
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1"
 DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
+TYPESAFE_URL = "https://api.typesafe.ai/v1/systemone"
 
 # The example response from the OpenRouter API reference.
 EXAMPLE_ANSWERS = {
@@ -71,6 +77,29 @@ EXAMPLE_RESPONSE = {
     "model": "typesafe/jev-1.13-20260917",
     "provider": "TypeSafe",
     "usage": {"cost": 0.000019992, "input_tokens": 476, "output_tokens": 70},
+}
+
+
+# TypeSafe's own envelope: no id, no provider, and no cost in usage.  The
+# answer shape is identical to the OpenRouter one.
+NATIVE_RESPONSE = {
+    "model": "jev-1.13.0",
+    "answers": {
+        "billing": {"type": "noul", "noul": 0.93},
+        "tone": {
+            "type": "choice",
+            "choice": "angry",
+            "probabilities": {"calm": 0.1, "angry": 0.9},
+            "confidence": 0.8,
+        },
+        "urgency": {
+            "type": "score",
+            "score": 2.0,
+            "probabilities": {"0": 0.0, "1": 0.0, "2": 1.0},
+            "confidence": 0.97,
+        },
+    },
+    "usage": {"input_tokens": 120, "output_tokens": 12},
 }
 
 
@@ -123,6 +152,111 @@ def make_backend(responses, **kwargs):
         **kwargs,
     )
     return backend, client
+
+
+def make_typesafe_backend(responses, **kwargs):
+    """Return a backend pointed at TypeSafe's own endpoint."""
+    kwargs.setdefault("backoff", 0)
+    client = FakeClient(responses)
+    backend = SystemOneBackend(
+        api_key="test-key",  # pragma: allowlist secret
+        model="jev-latest",
+        base_url=TYPESAFE_BASE_URL,
+        client=client,
+        **kwargs,
+    )
+    return backend, client
+
+
+class TestDirectTypeSafeRoute:
+    """TypeSafe serves the same request at /v1/systemone, not the alpha path."""
+
+    def test_typesafe_base_url_gets_the_systemone_path(self):
+        assert decisions_url(TYPESAFE_BASE_URL) == TYPESAFE_URL
+
+    def test_typesafe_base_url_with_trailing_slash(self):
+        assert decisions_url(TYPESAFE_BASE_URL + "/") == TYPESAFE_URL
+
+    def test_bare_typesafe_domain_also_matches(self):
+        """The path is chosen by host; the host itself is not rewritten."""
+        assert (
+            decisions_url("https://typesafe.ai/v1")
+            == "https://typesafe.ai/v1/systemone"
+        )
+
+    def test_the_two_routes_do_not_share_a_path(self):
+        assert decisions_url(TYPESAFE_BASE_URL) != DECISIONS_URL
+        assert TYPESAFE_DECISIONS_PATH == "/v1/systemone"
+
+    def test_a_lookalike_host_keeps_the_openrouter_path(self):
+        """A host that merely contains 'typesafe' is not the TypeSafe API."""
+        assert (
+            decisions_url("https://nottypesafe.ai/v1")
+            == "https://nottypesafe.ai/api/alpha/decisions"
+        )
+
+    def test_other_hosts_keep_the_openrouter_path(self):
+        assert decisions_url(OPENROUTER_URL) == DECISIONS_URL
+        assert (
+            decisions_url("https://gateway.example.com/v1")
+            == "https://gateway.example.com/api/alpha/decisions"
+        )
+
+    def test_backend_on_typesafe_posts_to_systemone(self):
+        backend, client = make_typesafe_backend([FakeResponse(200, NATIVE_RESPONSE)])
+        backend.decide(state="x", questions={"q": Noul("Is it?")})
+        assert client.calls[0]["url"] == TYPESAFE_URL
+        assert client.calls[0]["headers"]["Authorization"] == "Bearer test-key"
+
+    def test_the_alias_is_sent_through_unchanged(self):
+        """'jev-latest' is the server's alias; the client must not rewrite it."""
+        backend, client = make_typesafe_backend([FakeResponse(200, NATIVE_RESPONSE)])
+        backend.decide(state="x", questions={"q": Noul("Is it?")})
+        assert client.calls[0]["json"]["model"] == "jev-latest"
+
+    def test_the_response_names_the_version_behind_the_alias(self):
+        """An alias moves, so the answering model is the log-worthy receipt."""
+        backend, client = make_typesafe_backend([FakeResponse(200, NATIVE_RESPONSE)])
+        response = backend.decide(
+            state="x", questions={"q": Noul("Is it?")}, model="jev-latest"
+        )
+        assert client.calls[0]["json"]["model"] == "jev-latest"
+        assert response.model == "jev-1.13.0"
+
+
+class TestNativeResponseShape:
+    """TypeSafe's own envelope has no id, no provider, and no cost."""
+
+    def test_native_envelope_parses(self):
+        response = DecisionsResponse.from_wire(NATIVE_RESPONSE)
+        assert response.model == "jev-1.13.0"
+        assert response.id is None
+        assert response.provider is None
+        assert response.usage == {"input_tokens": 120, "output_tokens": 12}
+
+    def test_native_answers_are_typed(self):
+        response = DecisionsResponse.from_wire(NATIVE_RESPONSE)
+        assert isinstance(response.answers["billing"], NoulAnswer)
+        assert response.answers["billing"].noul == 0.93
+        assert isinstance(response.answers["tone"], ChoiceAnswer)
+        assert response.answers["tone"].choice == "angry"
+        assert isinstance(response.answers["urgency"], ScoreAnswer)
+        assert response.answers["urgency"].score == 2.0
+
+    def test_a_decide_call_returns_the_native_answers(self):
+        backend, _ = make_typesafe_backend([FakeResponse(200, NATIVE_RESPONSE)])
+        response = backend.decide(
+            state="I was charged twice. Please help ASAP.",
+            questions={
+                "billing": Noul("Is this about billing?"),
+                "urgency": Score(
+                    instructions="How urgent is this?",
+                    criteria=["low", "medium", "high"],
+                ),
+            },
+        )
+        assert response.answers["billing"].noul == 0.93
+        assert response.answers["urgency"].score == 2.0
 
 
 class TestDecisionsUrl:

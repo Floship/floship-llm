@@ -11,13 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **System One (TypeSafe Jev) support:** `LLM.decisions()` asks typed questions of a judgment model and returns typed answers, so calling code branches on a value instead of parsing prose.  Every question travels in one request and is evaluated in parallel against the same state.  New primitives `Noul`, `Choice` and `Score` serialise to the wire format; answers come back as `NoulAnswer`, `ChoiceAnswer` and `ScoreAnswer` inside a `DecisionsResponse` that also carries the model, provider, id and usage.  An answer of an unrecognised type degrades to its raw mapping instead of raising.
-- **`SystemOneBackend`:** posts to the decisions route.  That path is NOT under the OpenAI-compatible `/api/v1` prefix, so the endpoint is derived from the base URL's scheme and host.  Retries the statuses the API documents as transient with exponential backoff, and raises `SystemOneError` carrying the server's own message, status, error code and body.  `chat()` and `embed()` raise `NotImplementedError`, because System One is not a chat backend.
+- **`SystemOneBackend`:** posts to the decisions route on either route that serves Jev.  TypeSafe direct uses `POST https://api.typesafe.ai/v1/systemone`; OpenRouter uses `POST https://openrouter.ai/api/alpha/decisions`.  Neither path sits under an OpenAI-compatible prefix, so the endpoint is derived from the base URL's scheme and host, and the host picks the path.  The request and the response body are the same on both.  Retries the statuses the API documents as transient with exponential backoff, and raises `SystemOneError` carrying the server's own message, status, error code and body.  `chat()` and `embed()` raise `NotImplementedError`, because System One is not a chat backend.
+- **Alias support:** `jev-latest` is sent through unchanged, so a TypeSafe-direct client can use it.  It resolves to `jev-1.13.0` today, which is the newest Jev release; `jev-preview` points at the same build.  An alias moves when TypeSafe ships, so the response's `model` field is the receipt for which version answered, surfaced as `DecisionsResponse.model`.  Pin a versioned id once confidence thresholds have been tuned against a build.
 - `LLM` accepts `decisions_endpoint` and `decisions_timeout`, and exposes `close_systemone()` to release the HTTP client it created.
 - `httpx` is now a direct dependency.  It already arrived with `openai`; declaring it makes the transport explicit.
-- 66 tests in `tests/test_systemone.py`, using the response examples published in OpenRouter's API reference.
+- 85 tests in `tests/test_systemone.py`, using the response examples published in OpenRouter's API reference and TypeSafe's own response shape.
 
 ### Notes
 - A model blocked by an OpenRouter workspace guardrail is reported as HTTP 404 with the guardrail URL in the message, so the error text is the thing to read.
+- TypeSafe allows 250,000 tokens per second and 1,200 requests per minute; a request over either limit returns 429.
 
 ## [1.6.3] - 2026-06-16
 

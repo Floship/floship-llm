@@ -221,14 +221,45 @@ elif answer.score > 1.5:
     escalate(ticket_id)
 ```
 
-**Notes**
+**Two routes serve the same request.**  Pick one through `INFERENCE_URL`.  The
+request and the response body are identical on both.
 
-- The decisions route is not under the OpenAI-compatible `/api/v1` prefix.
-  `SystemOneBackend` derives the endpoint from the base URL's scheme and host.
+| Route           | Base URL                          | Model id             | Key                   |
+| --------------- | --------------------------------- | -------------------- | --------------------- |
+| TypeSafe direct | `https://api.typesafe.ai/v1`       | `jev-latest`         | `TYPESAFE_API_KEY`    |
+| OpenRouter      | `https://openrouter.ai/api/v1`     | `typesafe/jev-1.13`  | `OPENROUTER_API_KEY`  |
+
+```bash
+# TypeSafe direct: posts to /v1/systemone, and the alias jev-latest works
+export INFERENCE_URL=https://api.typesafe.ai/v1
+export INFERENCE_MODEL_ID=jev-latest
+export INFERENCE_KEY=$TYPESAFE_API_KEY
+
+# OpenRouter: posts to /api/alpha/decisions
+export INFERENCE_URL=https://openrouter.ai/api/v1
+export INFERENCE_MODEL_ID=typesafe/jev-1.13
+export INFERENCE_KEY=$OPENROUTER_API_KEY
+```
+
+Neither path sits under an OpenAI-compatible prefix, so `SystemOneBackend`
+picks the path from the base URL's host.
+
+**`jev-latest` is an alias, not a model.**  It currently resolves to
+`jev-1.13.0`, which is the newest Jev release; `jev-preview` points at the
+same build.  An alias moves when TypeSafe ships, so the answers behind it can
+change with no change on your side.  The response's `model` field reports the
+versioned id that answered, so log `response.model` rather than the alias.
+Once you have tuned confidence thresholds against a build, pin that version's
+id and move to the next one on your own schedule.
+
+**Failure modes**
+
 - A model blocked by an OpenRouter workspace guardrail is reported as HTTP 404,
   with the guardrail URL in the message.  Read the `SystemOneError` text
   rather than assuming the model is missing.
 - `decisions()` raises `ValueError` on an empty state or no questions.
+- TypeSafe allows 250,000 tokens per second and 1,200 requests per minute; a
+  request over either returns 429, which the backend retries with backoff.
 
 ## Tool Calling
 

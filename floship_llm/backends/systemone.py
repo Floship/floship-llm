@@ -4,9 +4,15 @@ Jev is not reachable through the OpenAI-compatible surface.  A decisions
 request carries a 'state' and a set of 'questions' and returns typed answers,
 so it needs its own transport rather than a chat completion.
 
-The documented route is a POST to '/api/alpha/decisions' on the OpenRouter
-host.  Note that the path is NOT under the OpenAI-compatible '/api/v1'
-prefix, so the endpoint is derived from the base URL's scheme and host only.
+Two routes serve the same request and the same response body:
+
+* TypeSafe direct -- POST https://api.typesafe.ai/v1/systemone, with a
+  TypeSafe key.  This is the route that accepts the 'jev-latest' alias.
+* OpenRouter      -- POST https://openrouter.ai/api/alpha/decisions, with an
+  OpenRouter key, model 'typesafe/jev-1.13'.
+
+Neither path sits under an OpenAI-compatible prefix, so the endpoint is
+derived from the base URL's scheme and host only, and the host picks the path.
 
 Chat completions and embeddings do not apply to this backend.
 """
@@ -21,7 +27,17 @@ import httpx
 
 from floship_llm.backends.base import ProviderBackend
 
-DECISIONS_PATH = "/api/alpha/decisions"
+# OpenRouter exposes the alpha decisions route.  TypeSafe serves the same
+# request shape at /v1/systemone, which is also where the 'jev-latest' alias
+# resolves to a versioned model id.
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_DECISIONS_PATH = "/api/alpha/decisions"
+TYPESAFE_BASE_URL = "https://api.typesafe.ai/v1"
+TYPESAFE_DECISIONS_PATH = "/v1/systemone"
+
+# The OpenRouter path under its historical name, kept for existing imports.
+DECISIONS_PATH = OPENROUTER_DECISIONS_PATH
+
 DEFAULT_TIMEOUT = 120.0
 DEFAULT_MAX_ATTEMPTS = 3
 DEFAULT_BACKOFF_SECONDS = 0.5
@@ -66,8 +82,9 @@ class SystemOneError(RuntimeError):
 def decisions_url(base_url: str) -> str:
     """Return the decisions endpoint for an OpenAI-compatible base URL.
 
-    Only the scheme and host are kept, because the decisions path is not under
-    the OpenAI-compatible prefix.
+    Only the scheme and host are kept, because neither route serves decisions
+    under an OpenAI-compatible prefix.  A TypeSafe host gets '/v1/systemone';
+    any other host gets OpenRouter's '/api/alpha/decisions'.
 
     Raises:
         ValueError: if 'base_url' is not absolute.
@@ -78,7 +95,10 @@ def decisions_url(base_url: str) -> str:
             "A decisions request needs an absolute base URL such as "
             f"'https://openrouter.ai/api/v1'; got {base_url!r}"
         )
-    return f"{parts.scheme}://{parts.netloc}{DECISIONS_PATH}"
+    host = (parts.hostname or "").lower()
+    is_typesafe = host == "typesafe.ai" or host.endswith(".typesafe.ai")
+    path = TYPESAFE_DECISIONS_PATH if is_typesafe else OPENROUTER_DECISIONS_PATH
+    return f"{parts.scheme}://{parts.netloc}{path}"
 
 
 def question_to_wire(question: Any) -> Dict[str, Any]:
