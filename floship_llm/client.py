@@ -2779,12 +2779,17 @@ class LLM:
                             **params, messages=validated_messages
                         )
                         full_response = ""
+                        reasoning = ""
                         for chunk in stream:
                             if chunk.choices and len(chunk.choices) > 0:
                                 delta = chunk.choices[0].delta
+                                reasoning += self._get_stream_delta_reasoning(delta)
                                 delta_text = self._get_stream_delta_text(delta)
                                 if delta_text:
                                     full_response += delta_text
+                        # Reasoning arrives on its own channel: it is kept for the
+                        # caller and never added to the text this returns.
+                        self._last_native_reasoning = reasoning or None
                         return full_response
 
                     full_response = self.retry_handler.execute_with_retry(
@@ -2792,7 +2797,10 @@ class LLM:
                     )
 
                     # Process the collected streaming response
-                    result = self._process_streaming_response(full_response)
+                    streamed_reasoning = self._last_native_reasoning
+                    result = self._process_streaming_response(
+                        full_response, streamed_reasoning=streamed_reasoning
+                    )
                 else:
                     # Non-streaming mode (for tools)
                     response = self.retry_handler.execute_with_retry(
@@ -3018,15 +3026,21 @@ class LLM:
                 stream = self.backend.chat(**params, messages=validated_messages)
 
                 full_response = ""
+                streamed_reasoning = ""
 
                 # Yield chunks as they arrive
                 for chunk in stream:
                     if chunk.choices and len(chunk.choices) > 0:
                         delta = chunk.choices[0].delta
+                        streamed_reasoning += self._get_stream_delta_reasoning(delta)
                         content = self._get_stream_delta_text(delta)
                         if content:
                             full_response += content
                             yield content
+
+                # The reasoning arrived on its own channel; keep it for the caller and
+                # out of the text that was yielded.
+                self._last_native_reasoning = streamed_reasoning or None
 
                 # Add complete response to conversation history
                 if full_response:
@@ -3213,7 +3227,12 @@ class LLM:
             raise
         return self._unwrap_thinking_response(parsed)
 
-    def _finalize_response(self, raw_message: str, response_obj=None) -> Any:
+    def _finalize_response(
+        self,
+        raw_message: str,
+        response_obj=None,
+        streamed_reasoning: Optional[str] = None,
+    ) -> Any:
         """
         Finalize an LLM response from either streaming or non-streaming path.
 
@@ -3224,6 +3243,8 @@ class LLM:
         Args:
             raw_message: Raw response text (may contain reasoning tags)
             response_obj: Optional API response object (for native extended_thinking reasoning)
+            streamed_reasoning: Reasoning collected from streaming deltas, which arrive
+                on their own channel and never enter raw_message
 
         Returns:
             Processed response text or structured output (Pydantic model instance)
@@ -3235,16 +3256,24 @@ class LLM:
         raw_message = raw_message.strip()
         self._last_raw_response = raw_message
 
-        # Extract reasoning from available sources
-        self._last_native_reasoning = None
+        # Extract reasoning from available sources. Reasoning that arrived as deltas
+        # before this call is already collected and is kept.
+        self._last_native_reasoning = streamed_reasoning or None
 
-        # 1. Native reasoning from extended_thinking API response
+        # 1. Native reasoning from extended_thinking API response, or the reasoning
+        #    string OpenRouter returns beside the message of a reasoning model
         if response_obj:
             try:
                 reasoning_obj = getattr(
                     response_obj.choices[0].message, "reasoning", None
                 )
-                if reasoning_obj is not None:
+                if isinstance(reasoning_obj, str):
+                    if reasoning_obj:
+                        self._last_native_reasoning = reasoning_obj
+                        logger.debug(
+                            f"Native reasoning extracted ({len(self._last_native_reasoning)} chars)"
+                        )
+                elif reasoning_obj is not None:
                     thinking = getattr(reasoning_obj, "thinking", None)
                     if thinking and isinstance(thinking, str):
                         self._last_native_reasoning = thinking
@@ -3351,7 +3380,9 @@ class LLM:
             response_obj=response,
         )
 
-    def _process_streaming_response(self, full_response: str) -> str:
+    def _process_streaming_response(
+        self, full_response: str, streamed_reasoning: Optional[str] = None
+    ) -> str:
         """
         Process a response collected from streaming.
 
@@ -3359,27 +3390,49 @@ class LLM:
 
         Args:
             full_response: The complete response text collected from streaming chunks
+            streamed_reasoning: Reasoning collected from the same chunks, which travels
+                beside the text and never inside it
 
         Returns:
             Processed response text or structured output (Pydantic model instance)
         """
-        return self._finalize_response(full_response)
+        return self._finalize_response(
+            full_response, streamed_reasoning=streamed_reasoning
+        )
 
     def _get_stream_delta_text(self, delta) -> str:
-        """Extract visible response text from a streaming delta."""
-        content = getattr(delta, "content", None)
-        if content:
-            return content
+        """
+        The visible text of one streaming delta.
 
-        reasoning = getattr(delta, "reasoning", None)
-        if reasoning and isinstance(reasoning, str):
-            return reasoning
+        Only 'content' is visible. A reasoning model streams its thoughts in
+        'reasoning' before it streams the answer in 'content', so returning
+        reasoning here prefixed every answer with the model's own planning: a
+        caller that writes the response to Jira, a pull request or a Slack
+        summary published the thoughts as the result. Reasoning stays available
+        through get_last_reasoning(), which is where it is collected.
+        """
+        content = getattr(delta, "content", None)
+        return content if isinstance(content, str) else ""
+
+    def _get_stream_delta_reasoning(self, delta) -> str:
+        """
+        The reasoning text of one streaming delta, when the provider streams one.
+
+        OpenRouter puts it in 'reasoning' (a string, unlike the Anthropic object
+        shape), some OpenAI-compatible servers use 'reasoning_content', and the
+        OpenAI SDK carries either in model_extra.
+        """
+        for attribute in ("reasoning", "reasoning_content"):
+            value = getattr(delta, attribute, None)
+            if isinstance(value, str) and value:
+                return value
 
         model_extra = getattr(delta, "model_extra", None) or {}
         if isinstance(model_extra, dict):
-            reasoning = model_extra.get("reasoning")
-            if reasoning and isinstance(reasoning, str):
-                return reasoning
+            for key in ("reasoning", "reasoning_content"):
+                value = model_extra.get(key)
+                if isinstance(value, str) and value:
+                    return value
 
         return ""
 
@@ -3850,8 +3903,10 @@ class LLM:
                 def generate_streamed_response():
                     """Generator for streaming the final response."""
                     full_response = ""
+                    streamed_reasoning = ""
 
                     # Yield the first chunk we already got
+                    streamed_reasoning += self._get_stream_delta_reasoning(first_delta)
                     first_content = self._get_stream_delta_text(first_delta)
                     if first_content:
                         full_response += first_content
@@ -3861,10 +3916,17 @@ class LLM:
                     for chunk in stream:
                         if chunk.choices and len(chunk.choices) > 0:
                             delta = chunk.choices[0].delta
+                            streamed_reasoning += self._get_stream_delta_reasoning(
+                                delta
+                            )
                             content = self._get_stream_delta_text(delta)
                             if content:
                                 full_response += content
                                 yield content
+
+                    # The reasoning arrived on its own channel; keep it for the caller
+                    # and out of the text that was yielded.
+                    self._last_native_reasoning = streamed_reasoning or None
 
                     # Add complete response to conversation history
                     if full_response:

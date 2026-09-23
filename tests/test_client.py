@@ -796,11 +796,12 @@ class TestLLM:
                 assert llm.get_last_reasoning() is None
 
     def test_prompt_with_response_format_reasoning_stream(self):
-        """Structured output parses when stream chunks put text in reasoning."""
+        """Structured output parses from content while the stream's reasoning stays aside."""
         with patch("floship_llm.client.OpenAI") as mock_openai:
             plain_response = '{"name": "test", "value": 42}'
             mock_openai.return_value.chat.completions.create.return_value = (
-                create_mock_reasoning_stream_response(plain_response)
+                create_mock_reasoning_stream_response("Let me build the record. ")
+                + create_mock_stream_response(plain_response)
             )
 
             llm = LLM(response_format=ResponseModelForTesting)
@@ -811,6 +812,70 @@ class TestLLM:
             assert isinstance(result, ResponseModelForTesting)
             assert result.name == "test"
             assert result.value == 42
+            assert llm.get_last_reasoning() == "Let me build the record. "
+
+    def test_streaming_reasoning_is_not_part_of_the_response(self):
+        """A reasoning model's thoughts never enter the text the caller receives."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            mock_openai.return_value.chat.completions.create.return_value = (
+                create_mock_reasoning_stream_response(
+                    "We need answer user. Let me check. "
+                )
+                + create_mock_stream_response("Paris.")
+            )
+
+            llm = LLM()
+            llm.messages = []
+
+            result = llm.prompt("Capital of France?")
+
+            assert result == "Paris."
+            assert llm.get_last_reasoning() == "We need answer user. Let me check. "
+
+    def test_a_stream_that_carries_only_reasoning_returns_no_text(self):
+        """Reasoning is not a response: a stream with no content yields nothing."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            mock_openai.return_value.chat.completions.create.return_value = (
+                create_mock_reasoning_stream_response("We need answer user.")
+            )
+
+            llm = LLM()
+            llm.messages = []
+
+            result = llm.prompt("Hello")
+
+            assert result == ""
+            assert llm.get_last_reasoning() == "We need answer user."
+
+    def test_a_reasoning_string_on_a_non_streamed_message_is_kept_aside(self):
+        """OpenRouter returns reasoning as a string; it is stored, not shown."""
+        with patch("floship_llm.client.OpenAI") as mock_openai:
+            reasoning = "We need answer user. The capital is Paris."
+            mock_message = Mock()
+            mock_message.content = "Paris."
+            mock_message.reasoning = reasoning
+            mock_message.model_extra = {"reasoning": reasoning}
+            mock_choice = Mock()
+            mock_choice.message = mock_message
+            mock_choice.finish_reason = "stop"
+            mock_response = Mock()
+            mock_response.choices = [mock_choice]
+            mock_response.usage = None
+            mock_openai.return_value.chat.completions.create.return_value = (
+                mock_response
+            )
+
+            llm = LLM(
+                model="deepseek/deepseek-v4.1-flash",
+                api_key="test",  # pragma: allowlist secret
+                base_url="https://openrouter.ai/api/v1",
+            )
+            llm.messages = []
+
+            result = llm.prompt("Capital of France?", force_no_stream=True)
+
+            assert result == "Paris."
+            assert llm.get_last_reasoning() == reasoning
 
     def test_prompt_with_response_format_and_extended_thinking(self):
         """Test prompt with response format + extended_thinking returns user's original model type (wrapped)."""

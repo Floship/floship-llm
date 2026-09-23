@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-09-23
+
+### Fixed
+- **Streamed reasoning is no longer returned as response text.** A reasoning model streams its
+  thoughts in `reasoning` before it streams the answer in `content`. `_get_stream_delta_text()`
+  returned a reasoning delta whenever a chunk carried no content, so every streamed answer arrived
+  with the model's own planning in front of it. Callers that store the response — Jira release
+  notes, Slack summaries, pull-request bodies — published those thoughts as the result (FP versions
+  2026.169 and 2026.170 were sent out this way). Reasoning deltas are now collected into
+  `get_last_reasoning()` and never enter the returned text, which is the contract this class
+  documents. A stream that carries only reasoning returns an empty response.
+- **Reasoning strings on non-streamed messages are captured.** OpenRouter returns `reasoning` as a
+  string on the message while the Anthropic shape nests it under `reasoning.thinking`.
+  `_finalize_response()` read only the nested shape, so a reasoning string was dropped and
+  `get_last_reasoning()` returned `None` for those providers. Both shapes now reach it.
+
 ## [1.7.0] - 2026-09-22
 
 ### Added
